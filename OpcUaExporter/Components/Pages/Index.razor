@@ -52,6 +52,11 @@
                     ✕ Cancel Browse
                 </button>
             }
+
+            <div class="btn-row">
+                <button class="btn btn-ghost" @onclick="SaveServerProfile" disabled="@Opc.IsBusy">Save Profile</button>
+                <button class="btn btn-ghost" @onclick="LoadServerProfile" disabled="@Opc.IsBusy">Load Profile</button>
+            </div>
         </section>
 
         <!-- Selection actions -->
@@ -184,6 +189,30 @@
         Opc.StateChanged += StateHasChanged;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        var lastProfilePath = Opc.GetExistingLastProfilePath();
+        if (string.IsNullOrWhiteSpace(lastProfilePath))
+            return;
+
+        try
+        {
+            var shouldLoad = await JS.InvokeAsync<bool>("showConfirm", $"Load last saved server profile?\n{lastProfilePath}");
+            if (shouldLoad)
+            {
+                await Opc.LoadProfileAsync(lastProfilePath);
+                StateHasChanged();
+            }
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
     private async Task Browse()        => await Opc.BrowseAsync();
     private Task CancelBrowse()
     {
@@ -216,6 +245,39 @@
                 _exportPath = path;
                 StateHasChanged();
             }
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private async Task SaveServerProfile()
+    {
+        try
+        {
+            var path = await JS.InvokeAsync<string>("showSaveDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            await Opc.SaveProfileAsync(path);
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private async Task LoadServerProfile()
+    {
+        try
+        {
+            var path = await JS.InvokeAsync<string>("showOpenDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            await Opc.LoadProfileAsync(path);
+            StateHasChanged();
         }
         catch
         {

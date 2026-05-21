@@ -19,6 +19,14 @@
         window.showSaveDialog = async function (filter) {
             return await DotNet.invokeMethodAsync('OpcUaExporter', 'ShowSaveDialogAsync', filter);
         };
+
+        window.showOpenDialog = async function (filter) {
+            return await DotNet.invokeMethodAsync('OpcUaExporter', 'ShowOpenDialogAsync', filter);
+        };
+
+        window.showConfirm = async function (message) {
+            return await DotNet.invokeMethodAsync('OpcUaExporter', 'ConfirmAsync', message);
+        };
     </script>
 </body>
 </html>

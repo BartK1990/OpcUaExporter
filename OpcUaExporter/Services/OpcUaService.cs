@@ -1,5 +1,7 @@
 using Microsoft.Extensions.Logging;
 using OpcUaExporter.Models;
+using System.Text.Json;
+using System.IO;
 
 namespace OpcUaExporter.Services;
 
@@ -35,6 +37,19 @@ public class OpcUaService
     {
         _bridge = bridge;
         _logger = logger;
+    }
+
+    private static string LastProfilePointerPath
+    {
+        get
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpcUaExporter");
+
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, "last-profile.txt");
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -99,6 +114,59 @@ public class OpcUaService
             LastReadings = await _bridge.ReadAsync(Profile.EndpointUrl, selected, ct);
             SetStatus($"Read {LastReadings.Count} tag(s) successfully.");
         });
+    }
+
+    public async Task SaveProfileAsync(string filePath, CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Saving server profile…");
+
+            var profile = new ConnectionProfile
+            {
+                Name = Profile.Name,
+                EndpointUrl = Profile.EndpointUrl
+            };
+
+            var json = JsonSerializer.Serialize(profile, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+
+            await File.WriteAllTextAsync(filePath, json, ct);
+            SaveLastProfilePath(filePath);
+
+            SetStatus($"Profile saved: {filePath}");
+        });
+    }
+
+    public async Task LoadProfileAsync(string filePath, CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Loading server profile…");
+
+            var json = await File.ReadAllTextAsync(filePath, ct);
+            var loaded = JsonSerializer.Deserialize<ConnectionProfile>(json)
+                         ?? throw new InvalidOperationException("Invalid profile file.");
+
+            Profile = loaded;
+            SaveLastProfilePath(filePath);
+
+            SetStatus($"Profile loaded: {filePath}");
+        });
+    }
+
+    public string? GetExistingLastProfilePath()
+    {
+        if (!File.Exists(LastProfilePointerPath))
+            return null;
+
+        var path = File.ReadAllText(LastProfilePointerPath).Trim();
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return null;
+
+        return path;
     }
 
     public async Task ExportAsync(ExportOptions options, CancellationToken ct = default)
@@ -182,6 +250,11 @@ public class OpcUaService
     }
 
     private void Notify() => StateChanged?.Invoke();
+
+    private static void SaveLastProfilePath(string filePath)
+    {
+        File.WriteAllText(LastProfilePointerPath, filePath);
+    }
 
     private static IEnumerable<OpcTag> FlattenAll(IEnumerable<OpcTag> tags)
     {

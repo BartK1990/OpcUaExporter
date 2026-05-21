@@ -1,5 +1,6 @@
 @page "/diagnostics"
 @inject DiagnosticsLogService DiagnosticsService
+@implements IDisposable
 
 <div class="app-shell">
 
@@ -44,5 +45,20 @@
 </div>
 
 @code {
+    protected override void OnInitialized()
+    {
+        DiagnosticsService.Changed += OnDiagnosticsChanged;
+    }
+
+    private void OnDiagnosticsChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
     private void ClearDiagnostics() => DiagnosticsService.Clear();
+
+    public void Dispose()
+    {
+        DiagnosticsService.Changed -= OnDiagnosticsChanged;
+    }
 }
