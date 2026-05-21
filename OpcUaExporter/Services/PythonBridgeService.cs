@@ -65,12 +65,19 @@ public class PythonBridgeService
                                                    IEnumerable<string> nodeIds,
                                                    CancellationToken ct = default)
     {
-        var idsJson = JsonSerializer.Serialize(nodeIds.ToList());
-        var result  = await RunAsync(ct, "read", endpointUrl, idsJson);
-        ValidateOk(result);
+        var idsPayloadFile = CreateNodeIdsPayloadFile(nodeIds);
+        try
+        {
+            var result = await RunAsync(ct, "read", endpointUrl, $"@{idsPayloadFile}");
+            ValidateOk(result);
 
-        return result.GetProperty("rows").Deserialize<List<TagReading>>(_json)
-               ?? new List<TagReading>();
+            return result.GetProperty("rows").Deserialize<List<TagReading>>(_json)
+                   ?? new List<TagReading>();
+        }
+        finally
+        {
+            TryDeleteFile(idsPayloadFile);
+        }
     }
 
     /// <summary>Export selected tags to a file.</summary>
@@ -79,11 +86,18 @@ public class PythonBridgeService
                                            ExportOptions options,
                                            CancellationToken ct = default)
     {
-        var idsJson = JsonSerializer.Serialize(nodeIds.ToList());
-        var result  = await RunAsync(ct, "export", endpointUrl, idsJson, options.OutputPath);
-        ValidateOk(result);
+        var idsPayloadFile = CreateNodeIdsPayloadFile(nodeIds);
+        try
+        {
+            var result = await RunAsync(ct, "export", endpointUrl, $"@{idsPayloadFile}", options.OutputPath);
+            ValidateOk(result);
 
-        return result.GetProperty("path").GetString() ?? options.OutputPath;
+            return result.GetProperty("path").GetString() ?? options.OutputPath;
+        }
+        finally
+        {
+            TryDeleteFile(idsPayloadFile);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -242,5 +256,25 @@ public class PythonBridgeService
         }
 
         return null;
+    }
+
+    private static string CreateNodeIdsPayloadFile(IEnumerable<string> nodeIds)
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), $"opcua-nodeids-{Guid.NewGuid():N}.json");
+        File.WriteAllText(filePath, JsonSerializer.Serialize(nodeIds.ToList()));
+        return filePath;
+    }
+
+    private static void TryDeleteFile(string filePath)
+    {
+        try
+        {
+            if (File.Exists(filePath))
+                File.Delete(filePath);
+        }
+        catch
+        {
+            // best effort cleanup
+        }
     }
 }

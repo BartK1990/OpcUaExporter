@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using OpcUaExporter.Models;
 using System.Text.Json;
+using System.Text;
 using System.IO;
 
 namespace OpcUaExporter.Services;
@@ -181,7 +182,33 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus($"Exporting {selected.Count} tag(s)…");
-            var path = await _bridge.ExportAsync(Profile.EndpointUrl, selected, options, ct);
+            var selectedSet = selected.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var cachedByNodeId = LastReadings
+                .Where(r => !string.IsNullOrWhiteSpace(r.NodeId))
+                .GroupBy(r => r.NodeId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            var missingNodeIds = selected.Where(id => !cachedByNodeId.ContainsKey(id)).ToList();
+            if (missingNodeIds.Count > 0)
+            {
+                SetStatus($"Reading {missingNodeIds.Count} missing tag(s) before export…");
+                var freshReadings = await _bridge.ReadAsync(Profile.EndpointUrl, missingNodeIds, ct);
+                foreach (var reading in freshReadings)
+                {
+                    if (!string.IsNullOrWhiteSpace(reading.NodeId))
+                        cachedByNodeId[reading.NodeId] = reading;
+                }
+
+                LastReadings = cachedByNodeId.Values.ToList();
+                Notify();
+            }
+
+            var rowsToExport = selected
+                .Where(id => cachedByNodeId.ContainsKey(id))
+                .Select(id => cachedByNodeId[id])
+                .ToList();
+
+            var path = await WriteExportFileAsync(options, rowsToExport, ct);
             SetStatus($"Exported to: {path}");
         });
     }
@@ -275,5 +302,59 @@ public class OpcUaService
 
         foreach (var tag in tags)
             SortTreeByNodeId(tag.Children);
+    }
+
+    private static async Task<string> WriteExportFileAsync(ExportOptions options, List<TagReading> rows, CancellationToken ct)
+    {
+        switch (options.Format)
+        {
+            case ExportFormat.Json:
+                var json = JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(options.OutputPath, json, ct);
+                break;
+
+            case ExportFormat.Csv:
+            default:
+                var csv = BuildCsv(rows);
+                await File.WriteAllTextAsync(options.OutputPath, csv, ct);
+                break;
+        }
+
+        return options.OutputPath;
+    }
+
+    private static string BuildCsv(IEnumerable<TagReading> rows)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Display Name,Node ID,Value,Data Type,Quality,Timestamp");
+
+        foreach (var r in rows)
+        {
+            sb.Append(EscapeCsv(r.DisplayName));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.NodeId));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.Error ?? r.Value?.ToString()));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.DataType));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.Quality));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.Timestamp));
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EscapeCsv(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        if (!value.Contains(',') && !value.Contains('"') && !value.Contains('\n') && !value.Contains('\r'))
+            return value;
+
+        return $"\"{value.Replace("\"", "\"\"")}\"";
     }
 }
