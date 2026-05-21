@@ -178,6 +178,8 @@
 </div>
 
 @code {
+    private static bool _startupProfilePromptShown;
+
     private string _exportFormat = "Csv";
     private string _exportPath   = string.Empty;
 
@@ -191,8 +193,10 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender)
+        if (!firstRender || _startupProfilePromptShown)
             return;
+
+        _startupProfilePromptShown = true;
 
         var lastProfilePath = Opc.GetExistingLastProfilePath();
         if (string.IsNullOrWhiteSpace(lastProfilePath))
