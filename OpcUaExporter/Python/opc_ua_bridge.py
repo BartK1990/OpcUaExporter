@@ -76,12 +76,36 @@ def sort_tree_by_nodeid(entries: list):
     entries.sort(key=lambda e: str(e.get("nodeId", "")).lower())
 
 
-def browse_recursive(node: Node, result: list, progress: dict, depth: int = 0, max_depth: int = 8):
+def env_flag(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def browse_recursive(
+    node: Node,
+    result: list,
+    progress: dict,
+    depth: int = 0,
+    max_depth: int = 8,
+    include_data_type: bool = False
+):
     """Recursively walk the address space and collect configuration metadata."""
     if depth > max_depth:
         return
     try:
-        children = node.get_children()
+        children = node.get_children_descriptions()
     except Exception:
         return
 
@@ -91,10 +115,10 @@ def browse_recursive(node: Node, result: list, progress: dict, depth: int = 0, m
             if progress["visited"] % 200 == 0:
                 log(f"browse progress: visited={progress['visited']} depth={depth}")
 
-            nc = child.get_node_class()
-            browse_name = child.get_browse_name()
-            display_name = child.get_display_name().Text
-            node_id = child.nodeid.to_string()
+            nc = child.NodeClass
+            browse_name = child.BrowseName
+            display_name = child.DisplayName.Text if child.DisplayName else ""
+            node_id = child.NodeId.to_string()
 
             entry = {
                 "nodeId": node_id,
@@ -105,14 +129,19 @@ def browse_recursive(node: Node, result: list, progress: dict, depth: int = 0, m
             }
 
             if nc == ua.NodeClass.Variable:
-                try:
-                    entry["dataType"] = variant_type_name(child.get_data_type_as_variant_type())
-                except Exception:
+                if include_data_type:
+                    try:
+                        data_node = node.server.get_node(node_id)
+                        entry["dataType"] = variant_type_name(data_node.get_data_type_as_variant_type())
+                    except Exception:
+                        entry["dataType"] = "Unknown"
+                else:
                     entry["dataType"] = "Unknown"
                 result.append(entry)
             elif nc == ua.NodeClass.Object:
                 sub_result = []
-                browse_recursive(child, sub_result, progress, depth + 1, max_depth)
+                child_node = node.server.get_node(node_id)
+                browse_recursive(child_node, sub_result, progress, depth + 1, max_depth, include_data_type)
                 entry["children"] = sub_result
                 result.append(entry)
         except Exception:
@@ -140,8 +169,11 @@ def cmd_browse(endpoint_url: str):
         root = client.get_objects_node()
         result = []
         progress = {"visited": 0}
+        max_depth = env_int("OPCUA_BROWSE_MAX_DEPTH", 8)
+        include_data_type = env_flag("OPCUA_BROWSE_INCLUDE_DATATYPE", False)
+        log(f"browse: settings max_depth={max_depth} include_data_type={include_data_type}")
         log("browse: walking address space")
-        browse_recursive(root, result, progress)
+        browse_recursive(root, result, progress, max_depth=max_depth, include_data_type=include_data_type)
         sort_tree_by_nodeid(result)
         log(f"browse: completed visited={progress['visited']} entries={len(result)}")
         print(json.dumps({"ok": True, "tags": result}))
