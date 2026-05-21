@@ -45,7 +45,10 @@
         <div class="tag-children">
             @foreach (var child in Tag.Children)
             {
-                <TagNode Tag="child" OnToggle="OnToggle" />
+                <TagNode Tag="child"
+                         OnToggle="OnToggle"
+                         OnSelectAllInFolder="OnSelectAllInFolder"
+                         OnSelectNoneInFolder="OnSelectNoneInFolder" />
             }
         </div>
     }

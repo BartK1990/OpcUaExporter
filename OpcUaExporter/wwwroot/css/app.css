@@ -385,7 +385,8 @@ body {
 
 .tag-name {
     font-size: 13px;
-    flex: 1;
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -404,7 +405,7 @@ body {
 .folder-actions {
     display: inline-flex;
     gap: 4px;
-    margin-right: 8px;
+    margin-left: 4px;
 }
 
 .folder-action-btn {

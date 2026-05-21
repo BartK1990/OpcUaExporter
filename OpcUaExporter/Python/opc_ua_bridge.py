@@ -77,7 +77,7 @@ def sort_tree_by_nodeid(entries: list):
 
 
 def browse_recursive(node: Node, result: list, progress: dict, depth: int = 0, max_depth: int = 8):
-    """Recursively walk the address space and collect Variable nodes."""
+    """Recursively walk the address space and collect configuration metadata."""
     if depth > max_depth:
         return
     try:
@@ -106,14 +106,9 @@ def browse_recursive(node: Node, result: list, progress: dict, depth: int = 0, m
 
             if nc == ua.NodeClass.Variable:
                 try:
-                    dv = child.get_data_value()
-                    entry["dataType"] = variant_type_name(dv.Value.VariantType)
-                    entry["value"] = safe_value(dv.Value.Value)
-                    entry["quality"] = str(dv.StatusCode)
+                    entry["dataType"] = variant_type_name(child.get_data_type_as_variant_type())
                 except Exception:
                     entry["dataType"] = "Unknown"
-                    entry["value"] = None
-                    entry["quality"] = "Error"
                 result.append(entry)
             elif nc == ua.NodeClass.Object:
                 sub_result = []
