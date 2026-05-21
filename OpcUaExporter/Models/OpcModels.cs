@@ -1,0 +1,53 @@
+namespace OpcUaExporter.Models;
+
+/// <summary>Represents a single OPC UA node/tag discovered during browsing.</summary>
+public class OpcTag
+{
+    public string NodeId      { get; set; } = string.Empty;
+    public string BrowseName  { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string NodeClass   { get; set; } = string.Empty;
+    public string? DataType   { get; set; }
+    public object? Value      { get; set; }
+    public string? Quality    { get; set; }
+    public bool   IsSelected  { get; set; }
+    public List<OpcTag> Children { get; set; } = new();
+
+    /// <summary>Flattens this node and all descendant Variable nodes.</summary>
+    public IEnumerable<OpcTag> Flatten()
+    {
+        if (NodeClass == "Variable")
+            yield return this;
+        foreach (var child in Children)
+            foreach (var t in child.Flatten())
+                yield return t;
+    }
+}
+
+/// <summary>A single tag value reading.</summary>
+public class TagReading
+{
+    public string  NodeId      { get; set; } = string.Empty;
+    public string  DisplayName { get; set; } = string.Empty;
+    public object? Value       { get; set; }
+    public string? DataType    { get; set; }
+    public string? Quality     { get; set; }
+    public string? Timestamp   { get; set; }
+    public string? Error       { get; set; }
+}
+
+/// <summary>Connection settings for an OPC UA server.</summary>
+public class ConnectionProfile
+{
+    public string Name        { get; set; } = "New Server";
+    public string EndpointUrl { get; set; } = "opc.tcp://localhost:4840";
+}
+
+/// <summary>Export options.</summary>
+public class ExportOptions
+{
+    public string OutputPath  { get; set; } = string.Empty;
+    public ExportFormat Format { get; set; } = ExportFormat.Csv;
+}
+
+public enum ExportFormat { Csv, Json }

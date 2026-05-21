@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OPC UA Exporter</title>
+    <base href="/" />
+    <link href="css/app.css" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Syne:wght@600;700&family=DM+Sans:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div id="app">Loading…</div>
+
+    <script src="_framework/blazor.webview.js" autostart="true"></script>
+
+    <!-- WinForms save-dialog bridge -->
+    <script>
+        window.showSaveDialog = async function (filter) {
+            return await DotNet.invokeMethodAsync('OpcUaExporter', 'ShowSaveDialogAsync', filter);
+        };
+    </script>
+</body>
+</html>
