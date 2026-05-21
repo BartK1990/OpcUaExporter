@@ -160,7 +160,7 @@ public class PythonBridgeService
                 return;
 
             stderrBuilder.AppendLine(e.Data);
-            _diagnostics.Add($"PY ERR: {e.Data}");
+            _diagnostics.Add($"PY DIAG: {e.Data}");
         };
 
         process.Start();
