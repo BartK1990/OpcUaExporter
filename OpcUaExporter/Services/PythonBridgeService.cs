@@ -13,8 +13,6 @@ namespace OpcUaExporter.Services;
 /// </summary>
 public class PythonBridgeService
 {
-    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(2);
-
     private readonly ILogger<PythonBridgeService> _logger;
     private readonly DiagnosticsLogService _diagnostics;
     private readonly string _pythonExe;
@@ -167,29 +165,7 @@ public class PythonBridgeService
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        timeoutCts.CancelAfter(ProcessTimeout);
-
-        try
-        {
-            await process.WaitForExitAsync(timeoutCts.Token);
-        }
-        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
-        {
-            _diagnostics.Add($"Python command timed out after {ProcessTimeout.TotalSeconds:0}s: {command}");
-
-            try
-            {
-                if (!process.HasExited)
-                    process.Kill(entireProcessTree: true);
-            }
-            catch
-            {
-                // ignore kill failures
-            }
-
-            throw new TimeoutException($"Python command '{command}' timed out after {ProcessTimeout.TotalSeconds:0} seconds.");
-        }
+        await process.WaitForExitAsync(ct);
 
         var stdout = stdoutBuilder.ToString().Trim();
         var stderr = stderrBuilder.ToString().Trim();

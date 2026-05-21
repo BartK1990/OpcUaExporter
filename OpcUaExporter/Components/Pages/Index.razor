@@ -45,6 +45,13 @@
                     <span>⟳ Browse Tags</span>
                 }
             </button>
+
+            @if (Opc.IsBrowsing)
+            {
+                <button class="btn btn-ghost" @onclick="CancelBrowse">
+                    ✕ Cancel Browse
+                </button>
+            }
         </section>
 
         <!-- Selection actions -->
@@ -178,6 +185,11 @@
     }
 
     private async Task Browse()        => await Opc.BrowseAsync();
+    private Task CancelBrowse()
+    {
+        Opc.CancelBrowse();
+        return Task.CompletedTask;
+    }
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
 
     private async Task Export()

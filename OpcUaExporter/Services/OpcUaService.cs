@@ -11,6 +11,7 @@ public class OpcUaService
 {
     private readonly PythonBridgeService _bridge;
     private readonly ILogger<OpcUaService> _logger;
+    private CancellationTokenSource? _browseCancellation;
 
     public event Action? StateChanged;
 
@@ -26,6 +27,7 @@ public class OpcUaService
 
     // Status / busy
     public bool   IsBusy       { get; private set; }
+    public bool   IsBrowsing   { get; private set; }
     public string StatusMessage { get; private set; } = "Ready";
     public bool   HasError      { get; private set; }
 
@@ -47,15 +49,39 @@ public class OpcUaService
 
     public async Task BrowseAsync(CancellationToken ct = default)
     {
-        await RunSafe(async () =>
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _browseCancellation = linkedCts;
+        IsBrowsing = true;
+        Notify();
+
+        try
         {
-            SetStatus("Connecting and browsing tags…");
-            TagTree      = await _bridge.BrowseAsync(Profile.EndpointUrl, ct);
-            SortTreeByNodeId(TagTree);
-            IsConnected  = true;
-            LastReadings = new();
-            SetStatus($"Browsed {FlatCount(TagTree)} variable tags.");
-        });
+            await RunSafe(async () =>
+            {
+                SetStatus("Connecting and browsing tags…");
+                TagTree      = await _bridge.BrowseAsync(Profile.EndpointUrl, linkedCts.Token);
+                SortTreeByNodeId(TagTree);
+                IsConnected  = true;
+                LastReadings = new();
+                SetStatus($"Browsed {FlatCount(TagTree)} variable tags.");
+            }, "Browse canceled.");
+        }
+        finally
+        {
+            IsBrowsing = false;
+            if (ReferenceEquals(_browseCancellation, linkedCts))
+                _browseCancellation = null;
+            Notify();
+        }
+    }
+
+    public void CancelBrowse()
+    {
+        if (!IsBrowsing)
+            return;
+
+        SetStatus("Canceling browse…");
+        _browseCancellation?.Cancel();
     }
 
     public async Task ReadSelectedAsync(CancellationToken ct = default)
@@ -123,7 +149,7 @@ public class OpcUaService
     // Helpers
     // -----------------------------------------------------------------------
 
-    private async Task RunSafe(Func<Task> action)
+    private async Task RunSafe(Func<Task> action, string? canceledMessage = null)
     {
         IsBusy   = true;
         HasError = false;
@@ -131,6 +157,10 @@ public class OpcUaService
         try
         {
             await action();
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus(canceledMessage ?? "Operation canceled.");
         }
         catch (Exception ex)
         {
