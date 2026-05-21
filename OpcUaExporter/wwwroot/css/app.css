@@ -241,6 +241,9 @@ body {
     overflow: hidden;
     background: var(--bg-0);
     padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 .content-split {
@@ -252,6 +255,12 @@ body {
 .browser-panel,
 .live-panel {
     min-height: 0;
+}
+
+.browser-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
 }
 
 .content-split .browser-panel {
