@@ -1,0 +1,48 @@
+@page "/diagnostics"
+@inject DiagnosticsLogService DiagnosticsService
+
+<div class="app-shell">
+
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <span class="logo-icon">⬡</span>
+                <span class="logo-text">OPC UA<br><small>Exporter</small></span>
+            </div>
+        </div>
+
+        <section class="panel">
+            <h3 class="panel-title">Navigation</h3>
+            <nav class="nav-menu">
+                <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
+                <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
+            </nav>
+        </section>
+    </aside>
+
+    <main class="content">
+        <div class="content-header">
+            <h2>Diagnostics</h2>
+            <span class="badge">@DiagnosticsService.Entries.Count line(s)</span>
+            <button class="btn btn-ghost" @onclick="ClearDiagnostics">Clear</button>
+        </div>
+
+        <div class="diagnostics-panel" style="max-height:none; height: calc(100vh - 130px);">
+            @if (!DiagnosticsService.Entries.Any())
+            {
+                <div class="diagnostics-empty">No diagnostics yet.</div>
+            }
+            else
+            {
+                @foreach (var line in DiagnosticsService.Entries)
+                {
+                    <div class="diagnostics-line">@line</div>
+                }
+            }
+        </div>
+    </main>
+</div>
+
+@code {
+    private void ClearDiagnostics() => DiagnosticsService.Clear();
+}

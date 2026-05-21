@@ -36,6 +36,10 @@ except ImportError as e:
 # Helpers
 # ---------------------------------------------------------------------------
 
+def log(message: str):
+    ts = datetime.now(timezone.utc).isoformat()
+    print(f"[bridge][{ts}] {message}", file=sys.stderr, flush=True)
+
 def node_class_name(nc):
     try:
         return nc.name
@@ -63,7 +67,16 @@ def safe_value(val):
     return str(val)
 
 
-def browse_recursive(node: Node, result: list, depth: int = 0, max_depth: int = 8):
+def sort_tree_by_nodeid(entries: list):
+    for entry in entries:
+        children = entry.get("children")
+        if isinstance(children, list) and children:
+            sort_tree_by_nodeid(children)
+
+    entries.sort(key=lambda e: str(e.get("nodeId", "")).lower())
+
+
+def browse_recursive(node: Node, result: list, progress: dict, depth: int = 0, max_depth: int = 8):
     """Recursively walk the address space and collect Variable nodes."""
     if depth > max_depth:
         return
@@ -74,6 +87,10 @@ def browse_recursive(node: Node, result: list, depth: int = 0, max_depth: int = 
 
     for child in children:
         try:
+            progress["visited"] += 1
+            if progress["visited"] % 200 == 0:
+                log(f"browse progress: visited={progress['visited']} depth={depth}")
+
             nc = child.get_node_class()
             browse_name = child.get_browse_name()
             display_name = child.get_display_name().Text
@@ -100,7 +117,7 @@ def browse_recursive(node: Node, result: list, depth: int = 0, max_depth: int = 
                 result.append(entry)
             elif nc == ua.NodeClass.Object:
                 sub_result = []
-                browse_recursive(child, sub_result, depth + 1, max_depth)
+                browse_recursive(child, sub_result, progress, depth + 1, max_depth)
                 entry["children"] = sub_result
                 result.append(entry)
         except Exception:
@@ -108,8 +125,11 @@ def browse_recursive(node: Node, result: list, depth: int = 0, max_depth: int = 
 
 
 def connect(endpoint_url: str) -> Client:
+    log(f"connect: creating client for endpoint={endpoint_url}")
     client = Client(endpoint_url)
+    log("connect: connecting...")
     client.connect()
+    log("connect: connected")
     return client
 
 
@@ -118,21 +138,32 @@ def connect(endpoint_url: str) -> Client:
 # ---------------------------------------------------------------------------
 
 def cmd_browse(endpoint_url: str):
+    log("browse: start")
     client = connect(endpoint_url)
     try:
+        log("browse: retrieving Objects node")
         root = client.get_objects_node()
         result = []
-        browse_recursive(root, result)
+        progress = {"visited": 0}
+        log("browse: walking address space")
+        browse_recursive(root, result, progress)
+        sort_tree_by_nodeid(result)
+        log(f"browse: completed visited={progress['visited']} entries={len(result)}")
         print(json.dumps({"ok": True, "tags": result}))
     finally:
+        log("browse: disconnecting")
         client.disconnect()
+        log("browse: done")
 
 
 def cmd_read(endpoint_url: str, node_ids: list):
+    log(f"read: start count={len(node_ids)}")
     client = connect(endpoint_url)
     try:
         rows = []
-        for nid in node_ids:
+        for i, nid in enumerate(node_ids, start=1):
+            if i == 1 or i % 25 == 0 or i == len(node_ids):
+                log(f"read progress: {i}/{len(node_ids)}")
             try:
                 node = client.get_node(nid)
                 dv = node.get_data_value()
@@ -147,16 +178,22 @@ def cmd_read(endpoint_url: str, node_ids: list):
                 })
             except Exception as ex:
                 rows.append({"nodeId": nid, "error": str(ex)})
+        log(f"read: completed rows={len(rows)}")
         print(json.dumps({"ok": True, "rows": rows}))
     finally:
+        log("read: disconnecting")
         client.disconnect()
+        log("read: done")
 
 
 def cmd_export(endpoint_url: str, node_ids: list, output_path: str):
+    log(f"export: start count={len(node_ids)} path={output_path}")
     client = connect(endpoint_url)
     try:
         rows = []
-        for nid in node_ids:
+        for i, nid in enumerate(node_ids, start=1):
+            if i == 1 or i % 25 == 0 or i == len(node_ids):
+                log(f"export progress: {i}/{len(node_ids)}")
             try:
                 node = client.get_node(nid)
                 dv = node.get_data_value()
@@ -178,18 +215,23 @@ def cmd_export(endpoint_url: str, node_ids: list, output_path: str):
 
         ext = os.path.splitext(output_path)[1].lower()
         if ext == ".csv":
+            log("export: writing CSV")
             with open(output_path, "w", newline="", encoding="utf-8") as f:
                 if rows:
                     writer = csv.DictWriter(f, fieldnames=rows[0].keys())
                     writer.writeheader()
                     writer.writerows(rows)
         else:
+            log("export: writing JSON")
             with open(output_path, "w", encoding="utf-8") as f:
                 json.dump(rows, f, indent=2)
 
+        log(f"export: completed rows={len(rows)}")
         print(json.dumps({"ok": True, "exported": len(rows), "path": output_path}))
     finally:
+        log("export: disconnecting")
         client.disconnect()
+        log("export: done")
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +245,7 @@ def main():
         sys.exit(1)
 
     command = sys.argv[1].lower()
+    log(f"main: command={command}")
 
     try:
         if command == "browse":

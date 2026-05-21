@@ -13,7 +13,10 @@ namespace OpcUaExporter.Services;
 /// </summary>
 public class PythonBridgeService
 {
+    private static readonly TimeSpan ProcessTimeout = TimeSpan.FromMinutes(2);
+
     private readonly ILogger<PythonBridgeService> _logger;
+    private readonly DiagnosticsLogService _diagnostics;
     private readonly string _pythonExe;
     private readonly string _scriptPath;
     private readonly string[] _searchedBaseDirs;
@@ -24,9 +27,10 @@ public class PythonBridgeService
         PropertyNameCaseInsensitive = true
     };
 
-    public PythonBridgeService(ILogger<PythonBridgeService> logger)
+    public PythonBridgeService(ILogger<PythonBridgeService> logger, DiagnosticsLogService diagnostics)
     {
         _logger = logger;
+        _diagnostics = diagnostics;
 
         var baseDirs = GetCandidateBaseDirectories().ToArray();
         _searchedBaseDirs = baseDirs;
@@ -38,6 +42,8 @@ public class PythonBridgeService
 
         _logger.LogInformation("Python exe  : {Exe}",    _pythonExe);
         _logger.LogInformation("Bridge script: {Script}", _scriptPath);
+        _diagnostics.Add($"Python executable: {_pythonExe}");
+        _diagnostics.Add($"Python bridge script: {_scriptPath}");
     }
 
     // -----------------------------------------------------------------------
@@ -99,21 +105,30 @@ public class PythonBridgeService
 
     private async Task<JsonElement> RunAsync(CancellationToken ct, params string[] args)
     {
+        var command = args.FirstOrDefault() ?? "unknown";
+
         if (!File.Exists(_pythonExe))
+        {
+            _diagnostics.Add("Embedded Python runtime not found.");
             throw new FileNotFoundException(
                 $"Embedded Python runtime not found at: {_pythonExe}\n" +
                 $"Searched base directories: {string.Join("; ", _searchedBaseDirs)}\n" +
                 "Run setup_python_runtime.ps1 to install it.", _pythonExe);
+        }
 
         if (!File.Exists(_scriptPath))
+        {
+            _diagnostics.Add("Python bridge script not found.");
             throw new FileNotFoundException(
                 $"Python bridge script not found at: {_scriptPath}", _scriptPath);
+        }
 
         // Build argument string – quote each arg to handle spaces/JSON
         var quotedArgs = string.Join(" ",
             args.Prepend(_scriptPath).Select(a => $"\"{a.Replace("\"", "\\\"")}\""));
 
         _logger.LogDebug("Running: {Exe} {Args}", _pythonExe, quotedArgs);
+        _diagnostics.Add($"Python command started: {command}");
 
         var psi = new ProcessStartInfo
         {
@@ -130,14 +145,51 @@ public class PythonBridgeService
         var stdoutBuilder = new StringBuilder();
         var stderrBuilder = new StringBuilder();
 
-        process.OutputDataReceived += (_, e) => { if (e.Data != null) stdoutBuilder.AppendLine(e.Data); };
-        process.ErrorDataReceived  += (_, e) => { if (e.Data != null) stderrBuilder.AppendLine(e.Data); };
+        process.OutputDataReceived += (_, e) =>
+        {
+            if (e.Data == null)
+                return;
+
+            stdoutBuilder.AppendLine(e.Data);
+            _diagnostics.Add($"PY OUT: {e.Data}");
+        };
+
+        process.ErrorDataReceived += (_, e) =>
+        {
+            if (e.Data == null)
+                return;
+
+            stderrBuilder.AppendLine(e.Data);
+            _diagnostics.Add($"PY ERR: {e.Data}");
+        };
 
         process.Start();
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
 
-        await process.WaitForExitAsync(ct);
+        using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeoutCts.CancelAfter(ProcessTimeout);
+
+        try
+        {
+            await process.WaitForExitAsync(timeoutCts.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            _diagnostics.Add($"Python command timed out after {ProcessTimeout.TotalSeconds:0}s: {command}");
+
+            try
+            {
+                if (!process.HasExited)
+                    process.Kill(entireProcessTree: true);
+            }
+            catch
+            {
+                // ignore kill failures
+            }
+
+            throw new TimeoutException($"Python command '{command}' timed out after {ProcessTimeout.TotalSeconds:0} seconds.");
+        }
 
         var stdout = stdoutBuilder.ToString().Trim();
         var stderr = stderrBuilder.ToString().Trim();
@@ -146,6 +198,15 @@ public class PythonBridgeService
             _logger.LogWarning("Python stderr: {Err}", stderr);
 
         _logger.LogDebug("Python stdout: {Out}", stdout);
+        _diagnostics.Add($"Python command finished (exit {process.ExitCode}): {command}");
+
+        if (process.ExitCode != 0)
+        {
+            var errorMsg = string.IsNullOrWhiteSpace(stderr)
+                ? $"Python process exited with code {process.ExitCode}."
+                : stderr;
+            throw new InvalidOperationException(errorMsg);
+        }
 
         if (string.IsNullOrWhiteSpace(stdout))
         {

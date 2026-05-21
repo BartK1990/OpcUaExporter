@@ -22,6 +22,7 @@ public partial class App : Application
         serviceCollection.AddLogging();
 
         // Application services — singletons so Blazor components share state
+        serviceCollection.AddSingleton<DiagnosticsLogService>();
         serviceCollection.AddSingleton<PythonBridgeService>();
         serviceCollection.AddSingleton<OpcUaService>();
 

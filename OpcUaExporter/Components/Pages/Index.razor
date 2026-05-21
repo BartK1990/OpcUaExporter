@@ -16,6 +16,14 @@
             </div>
         </div>
 
+        <section class="panel">
+            <h3 class="panel-title">Navigation</h3>
+            <nav class="nav-menu">
+                <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
+                <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
+            </nav>
+        </section>
+
         <!-- Connection profile -->
         <section class="panel">
             <h3 class="panel-title">Server Connection</h3>
@@ -146,6 +154,7 @@
                 </table>
             </div>
         }
+
     </main>
 </div>
 
@@ -216,5 +225,8 @@
         }
     }
 
-    public void Dispose() => Opc.StateChanged -= StateHasChanged;
+    public void Dispose()
+    {
+        Opc.StateChanged -= StateHasChanged;
+    }
 }

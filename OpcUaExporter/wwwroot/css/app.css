@@ -184,6 +184,24 @@ body {
 .btn-row { display: flex; gap: 6px; }
 .btn-row .btn { flex: 1; }
 
+.nav-menu {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.nav-link {
+    width: 100%;
+    justify-content: flex-start;
+    text-decoration: none;
+}
+
+.nav-link.active {
+    background: var(--bg-3);
+    border-color: var(--amber-dim);
+    color: var(--amber);
+}
+
 .selection-count {
     font-size: 11px;
     color: var(--amber);
@@ -407,3 +425,34 @@ body {
 .quality-uncertain{ color: var(--amber); }
 
 .row-error td { color: var(--red); opacity: .8; }
+
+/* ── Diagnostics panel ───────────────────────────────────── */
+.diagnostics-panel {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-1);
+    max-height: 280px;
+    overflow: auto;
+    padding: 8px;
+}
+
+.diagnostics-empty {
+    color: var(--text-muted);
+    font-size: 12px;
+    font-family: var(--font-mono);
+    padding: 4px;
+}
+
+.diagnostics-line {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 3px 4px;
+    border-radius: 4px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.diagnostics-line:nth-child(odd) {
+    background: rgba(255,255,255,0.02);
+}
