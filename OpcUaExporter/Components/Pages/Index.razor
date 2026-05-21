@@ -92,67 +92,74 @@
     </aside>
 
     <!-- ═══════════════════════ MAIN CONTENT ═══════════════════════ -->
-    <main class="content">
+    <main class="content @(Opc.LastReadings.Any() ? "content-split" : "")">
 
-        @if (!Opc.TagTree.Any() && !Opc.IsBusy)
-        {
-            <div class="empty-state">
-                <div class="empty-icon">⬡</div>
-                <h2>No Tags Loaded</h2>
-                <p>Enter your OPC UA server endpoint and click <strong>Browse Tags</strong>.</p>
-            </div>
-        }
-        else
-        {
-            <div class="content-header">
-                <h2>Tag Browser</h2>
-                <span class="badge">@FlatTagCount variable tags</span>
-            </div>
+        <section class="browser-panel">
+            @if (!Opc.TagTree.Any() && !Opc.IsBusy)
+            {
+                <div class="empty-state">
+                    <div class="empty-icon">⬡</div>
+                    <h2>No Tags Loaded</h2>
+                    <p>Enter your OPC UA server endpoint and click <strong>Browse Tags</strong>.</p>
+                </div>
+            }
+            else
+            {
+                <div class="content-header">
+                    <h2>Tag Browser</h2>
+                    <span class="badge">@FlatTagCount variable tags</span>
+                </div>
 
-            <!-- Tag tree -->
-            <div class="tag-tree-container">
-                @foreach (var tag in Opc.TagTree)
-                {
-                    <TagNode Tag="tag" OnToggle="HandleToggle" />
-                }
-            </div>
-        }
+                <!-- Tag tree -->
+                <div class="tag-tree-container tag-tree-scroll">
+                    @foreach (var tag in Opc.TagTree)
+                    {
+                        <TagNode Tag="tag"
+                                 OnToggle="HandleToggle"
+                                 OnSelectAllInFolder="HandleSelectAllInFolder"
+                                 OnSelectNoneInFolder="HandleSelectNoneInFolder" />
+                    }
+                </div>
+            }
+        </section>
 
         <!-- Live readings table -->
         @if (Opc.LastReadings.Any())
         {
-            <div class="content-header" style="margin-top:2rem;">
-                <h2>Live Readings</h2>
-                <span class="badge">@Opc.LastReadings.Count rows</span>
-            </div>
+            <section class="live-panel">
+                <div class="content-header">
+                    <h2>Live Readings</h2>
+                    <span class="badge">@Opc.LastReadings.Count rows</span>
+                </div>
 
-            <div class="table-wrapper">
-                <table class="data-table">
-                    <thead>
-                        <tr>
-                            <th>Display Name</th>
-                            <th>Node ID</th>
-                            <th>Value</th>
-                            <th>Data Type</th>
-                            <th>Quality</th>
-                            <th>Timestamp</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        @foreach (var r in Opc.LastReadings)
-                        {
-                            <tr class="@(r.Error != null ? "row-error" : "")">
-                                <td>@r.DisplayName</td>
-                                <td class="mono">@r.NodeId</td>
-                                <td class="mono">@(r.Error ?? r.Value?.ToString() ?? "–")</td>
-                                <td>@r.DataType</td>
-                                <td class="@QualityClass(r.Quality)">@r.Quality</td>
-                                <td class="mono">@r.Timestamp</td>
+                <div class="table-wrapper live-table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Display Name</th>
+                                <th>Node ID</th>
+                                <th>Value</th>
+                                <th>Data Type</th>
+                                <th>Quality</th>
+                                <th>Timestamp</th>
                             </tr>
-                        }
-                    </tbody>
-                </table>
-            </div>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in Opc.LastReadings)
+                            {
+                                <tr class="@(r.Error != null ? "row-error" : "")">
+                                    <td>@r.DisplayName</td>
+                                    <td class="mono">@r.NodeId</td>
+                                    <td class="mono">@(r.Error ?? r.Value?.ToString() ?? "–")</td>
+                                    <td>@r.DataType</td>
+                                    <td class="@QualityClass(r.Quality)">@r.Quality</td>
+                                    <td class="mono">@r.Timestamp</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
         }
 
     </main>
@@ -207,6 +214,16 @@
     private void HandleToggle(OpcTag tag)
     {
         Opc.ToggleTag(tag);
+    }
+
+    private void HandleSelectAllInFolder(OpcTag tag)
+    {
+        Opc.SelectInFolder(tag, true);
+    }
+
+    private void HandleSelectNoneInFolder(OpcTag tag)
+    {
+        Opc.SelectInFolder(tag, false);
     }
 
     private static string QualityClass(string? q) =>

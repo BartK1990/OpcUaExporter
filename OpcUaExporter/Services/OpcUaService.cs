@@ -51,6 +51,7 @@ public class OpcUaService
         {
             SetStatus("Connecting and browsing tags…");
             TagTree      = await _bridge.BrowseAsync(Profile.EndpointUrl, ct);
+            SortTreeByNodeId(TagTree);
             IsConnected  = true;
             LastReadings = new();
             SetStatus($"Browsed {FlatCount(TagTree)} variable tags.");
@@ -95,6 +96,14 @@ public class OpcUaService
     {
         foreach (var tag in FlattenAll(TagTree))
             tag.IsSelected = select;
+        Notify();
+    }
+
+    public void SelectInFolder(OpcTag folderTag, bool select)
+    {
+        foreach (var tag in FlattenAll(folderTag.Children))
+            tag.IsSelected = select;
+
         Notify();
     }
 
@@ -156,4 +165,12 @@ public class OpcUaService
 
     private static int FlatCount(IEnumerable<OpcTag> tags)
         => FlattenAll(tags).Count(t => t.NodeClass == "Variable");
+
+    private static void SortTreeByNodeId(List<OpcTag> tags)
+    {
+        tags.Sort((a, b) => string.Compare(a.NodeId, b.NodeId, StringComparison.OrdinalIgnoreCase));
+
+        foreach (var tag in tags)
+            SortTreeByNodeId(tag.Children);
+    }
 }

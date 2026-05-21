@@ -238,9 +238,47 @@ body {
 /* ── Main content area ──────────────────────────────────── */
 .content {
     flex: 1;
-    overflow-y: auto;
+    overflow: hidden;
     background: var(--bg-0);
     padding: 20px 24px;
+}
+
+.content-split {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.browser-panel,
+.live-panel {
+    min-height: 0;
+}
+
+.content-split .browser-panel {
+    flex: 0 0 65%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.content-split .live-panel {
+    flex: 0 0 35%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.tag-tree-scroll {
+    overflow: auto;
+    flex: 1;
+    min-height: 0;
+    padding-right: 4px;
+}
+
+.live-table-wrapper {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
 }
 
 .content-header {
@@ -361,6 +399,28 @@ body {
     border-radius: 3px;
     padding: 1px 5px;
     flex-shrink: 0;
+}
+
+.folder-actions {
+    display: inline-flex;
+    gap: 4px;
+    margin-right: 8px;
+}
+
+.folder-action-btn {
+    border: 1px solid var(--border-hi);
+    background: var(--bg-3);
+    color: var(--text-secondary);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-size: 10px;
+    font-family: var(--font-mono);
+    cursor: pointer;
+}
+
+.folder-action-btn:hover {
+    color: var(--text-primary);
+    border-color: var(--amber-dim);
 }
 
 .tag-value {

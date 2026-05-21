@@ -22,6 +22,14 @@
         <span class="tag-icon">@NodeIcon</span>
         <span class="tag-name">@Tag.DisplayName</span>
 
+        @if (Tag.NodeClass == "Object" && Tag.Children.Any())
+        {
+            <span class="folder-actions" @onclick:stopPropagation>
+                <button type="button" class="folder-action-btn" @onclick="() => OnSelectAllInFolder.InvokeAsync(Tag)">All</button>
+                <button type="button" class="folder-action-btn" @onclick="() => OnSelectNoneInFolder.InvokeAsync(Tag)">None</button>
+            </span>
+        }
+
         @if (Tag.NodeClass == "Variable")
         {
             <span class="tag-type">@Tag.DataType</span>
@@ -46,6 +54,8 @@
 @code {
     [Parameter] public OpcTag Tag { get; set; } = null!;
     [Parameter] public EventCallback<OpcTag> OnToggle { get; set; }
+    [Parameter] public EventCallback<OpcTag> OnSelectAllInFolder { get; set; }
+    [Parameter] public EventCallback<OpcTag> OnSelectNoneInFolder { get; set; }
 
     private bool _expanded = true;   // objects start expanded by default
 
