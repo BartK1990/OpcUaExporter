@@ -20,10 +20,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="Python\**\*">
+    <Content Update="Python\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="wwwroot\**\*">
+    <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>

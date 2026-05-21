@@ -1,9 +1,9 @@
-using System.Diagnostics;
-using System.Reflection;
-using System.Text;
-using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using OpcUaExporter.Models;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+using System.Text.Json;
 
 namespace OpcUaExporter.Services;
 
@@ -16,6 +16,7 @@ public class PythonBridgeService
     private readonly ILogger<PythonBridgeService> _logger;
     private readonly string _pythonExe;
     private readonly string _scriptPath;
+    private readonly string[] _searchedBaseDirs;
 
     // JSON options – case-insensitive to match Python output
     private static readonly JsonSerializerOptions _json = new()
@@ -27,11 +28,13 @@ public class PythonBridgeService
     {
         _logger = logger;
 
-        // Base directory is the folder that contains the running .exe
-        var baseDir = AppContext.BaseDirectory;
+        var baseDirs = GetCandidateBaseDirectories().ToArray();
+        _searchedBaseDirs = baseDirs;
 
-        _pythonExe  = Path.Combine(baseDir, "Python", "runtime", "python.exe");
-        _scriptPath = Path.Combine(baseDir, "Python", "opc_ua_bridge.py");
+        _pythonExe  = ResolveExistingPath(baseDirs, Path.Combine("Python", "runtime", "python.exe"))
+                      ?? Path.Combine(AppContext.BaseDirectory, "Python", "runtime", "python.exe");
+        _scriptPath = ResolveExistingPath(baseDirs, Path.Combine("Python", "opc_ua_bridge.py"))
+                      ?? Path.Combine(AppContext.BaseDirectory, "Python", "opc_ua_bridge.py");
 
         _logger.LogInformation("Python exe  : {Exe}",    _pythonExe);
         _logger.LogInformation("Bridge script: {Script}", _scriptPath);
@@ -99,6 +102,7 @@ public class PythonBridgeService
         if (!File.Exists(_pythonExe))
             throw new FileNotFoundException(
                 $"Embedded Python runtime not found at: {_pythonExe}\n" +
+                $"Searched base directories: {string.Join("; ", _searchedBaseDirs)}\n" +
                 "Run setup_python_runtime.ps1 to install it.", _pythonExe);
 
         if (!File.Exists(_scriptPath))
@@ -161,5 +165,45 @@ public class PythonBridgeService
             _logger.LogError(je, "Failed to parse Python output: {Out}", stdout);
             throw new InvalidOperationException($"Invalid JSON from Python bridge: {stdout}", je);
         }
+    }
+
+    private static IEnumerable<string> GetCandidateBaseDirectories()
+    {
+        var roots = new List<string>();
+
+        void AddRoot(string? path)
+        {
+            if (!string.IsNullOrWhiteSpace(path))
+                roots.Add(Path.GetFullPath(path));
+        }
+
+        AddRoot(AppContext.BaseDirectory);
+        AddRoot(Directory.GetCurrentDirectory());
+        AddRoot(Path.GetDirectoryName(Environment.ProcessPath));
+
+        var all = new List<string>();
+        foreach (var root in roots)
+        {
+            var dir = root;
+            for (var i = 0; i < 4 && !string.IsNullOrEmpty(dir); i++)
+            {
+                all.Add(dir);
+                dir = Directory.GetParent(dir)?.FullName;
+            }
+        }
+
+        return all.Distinct(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private static string? ResolveExistingPath(IEnumerable<string> baseDirs, string relativePath)
+    {
+        foreach (var baseDir in baseDirs)
+        {
+            var candidate = Path.Combine(baseDir, relativePath);
+            if (File.Exists(candidate))
+                return candidate;
+        }
+
+        return null;
     }
 }
