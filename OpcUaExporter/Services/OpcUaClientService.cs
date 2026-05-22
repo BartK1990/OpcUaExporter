@@ -15,6 +15,8 @@ namespace OpcUaExporter.Services;
 /// </summary>
 public class OpcUaClientService
 {
+    private const int BrowseProgressLogInterval = 1000;
+
     private readonly ILogger<OpcUaClientService> _logger;
     private readonly DiagnosticsLogService _diagnostics;
     private readonly Lazy<Task<ApplicationConfiguration>> _configuration;
@@ -33,9 +35,12 @@ public class OpcUaClientService
         using var session = await CreateSessionAsync(profile, ct);
 
         var rootNodeId = ObjectIds.ObjectsFolder;
-        var tags = await BrowseNodeRecursiveAsync(session, rootNodeId, ct);
+        var progress = new BrowseProgressState();
 
-        _diagnostics.Add($"Browse completed. Found {CountVariables(tags)} variable tag(s).");
+        _diagnostics.Add("Browse started.");
+        var tags = await BrowseNodeRecursiveAsync(session, rootNodeId, progress, ct);
+
+        _diagnostics.Add($"Browse completed. Scanned {progress.ScannedNodes} node(s). Found {CountVariables(tags)} variable tag(s).");
         return tags;
     }
 
@@ -70,22 +75,15 @@ public class OpcUaClientService
                     }
                 };
 
-                session.Read(
-                    null,
-                    0,
-                    TimestampsToReturn.Both,
-                    readValueIdCollection,
-                    out var dataValues,
-                    out _);
-
-                var value = dataValues?[0];
+                var readResponse = await session.ReadAsync(null, 0, TimestampsToReturn.Both, readValueIdCollection, ct);
+                var value = readResponse?.Results?[0];
                 row.Value = value?.Value;
                 row.Quality = value?.StatusCode.ToString();
                 row.Timestamp = value?.SourceTimestamp.ToString("o");
 
-                var node = session.ReadNode(NodeId.Parse(id));
+                var node = await session.ReadNodeAsync(NodeId.Parse(id), ct);
                 row.DisplayName = node?.DisplayName?.Text ?? id;
-                row.DataType = TryGetDataTypeName(node, session);
+                row.DataType = await TryGetDataTypeName(node, session);
             }
             catch (Exception ex)
             {
@@ -113,10 +111,11 @@ public class OpcUaClientService
 
         ct.ThrowIfCancellationRequested();
 
+        var config = await _configuration.Value;
         var discoveryUrl = CoreClientUtils.GetDiscoveryUrl(endpointUrl);
-        using var discoveryClient = DiscoveryClient.Create(discoveryUrl);
+        using var discoveryClient = await DiscoveryClient.CreateAsync(config, discoveryUrl, ct: ct);
 
-        var endpointDescriptions = await discoveryClient.GetEndpointsAsync(new StringCollection(), ct);
+        var endpointDescriptions = await discoveryClient.GetEndpointsAsync([], ct);
         if (endpointDescriptions is null || endpointDescriptions.Count == 0)
             throw new InvalidOperationException("No OPC UA endpoints were returned by the server.");
 
@@ -293,8 +292,9 @@ public class OpcUaClientService
     {
         ct.ThrowIfCancellationRequested();
 
+        var config = await _configuration.Value;
         var discoveryUrl = CoreClientUtils.GetDiscoveryUrl(endpointUrl);
-        using var discoveryClient = DiscoveryClient.Create(discoveryUrl);
+        using var discoveryClient = await DiscoveryClient.CreateAsync(config, discoveryUrl);
         var endpointDescriptions = await discoveryClient.GetEndpointsAsync(new StringCollection(), ct);
         if (endpointDescriptions is null || endpointDescriptions.Count == 0)
             throw new InvalidOperationException("No OPC UA endpoints were returned by the server.");
@@ -448,7 +448,7 @@ public class OpcUaClientService
         config.SecurityConfiguration.TrustedIssuerCertificates.StoreType = CertificateStoreType.Directory;
         config.SecurityConfiguration.RejectedCertificateStore.StoreType = CertificateStoreType.Directory;
 
-        await config.Validate(ApplicationType.Client);
+        await config.ValidateAsync(ApplicationType.Client);
 
         var appInstance = new ApplicationInstance
         {
@@ -546,11 +546,11 @@ public class OpcUaClientService
         return 0;
     }
 
-    private async Task<List<OpcTag>> BrowseNodeRecursiveAsync(Session session, NodeId nodeId, CancellationToken ct)
+    private async Task<List<OpcTag>> BrowseNodeRecursiveAsync(Session session, NodeId nodeId, BrowseProgressState progress, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
-        var references = session.FetchReferences(nodeId);
+        var references = await session.FetchReferencesAsync(nodeId, ct: ct);
         var children = new List<OpcTag>();
 
         foreach (var reference in references)
@@ -567,7 +567,7 @@ public class OpcUaClientService
             Node? node;
             try
             {
-                node = session.ReadNode(childNodeId);
+                node = await session.ReadNodeAsync(childNodeId, ct);
             }
             catch
             {
@@ -576,6 +576,12 @@ public class OpcUaClientService
 
             if (node is null)
                 continue;
+
+            progress.ScannedNodes++;
+            if (progress.ScannedNodes % BrowseProgressLogInterval == 0)
+            {
+                _diagnostics.Add($"Browse in progress: scanned {progress.ScannedNodes} node(s). Latest node: {childNodeId}");
+            }
 
             var tag = new OpcTag
             {
@@ -587,12 +593,12 @@ public class OpcUaClientService
 
             if (node is VariableNode variable)
             {
-                tag.DataType = GetDataTypeName(variable.DataType, session);
+                tag.DataType = await GetDataTypeName(variable.DataType, session);
             }
 
             if (node.NodeClass is NodeClass.Object or NodeClass.Variable)
             {
-                var nested = await BrowseNodeRecursiveAsync(session, childNodeId, ct);
+                var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, ct);
                 tag.Children = nested;
             }
 
@@ -602,15 +608,15 @@ public class OpcUaClientService
         return children;
     }
 
-    private static string? TryGetDataTypeName(Node? node, Session session)
+    private static async Task<string?> TryGetDataTypeName(Node? node, Session session)
     {
         if (node is VariableNode variable)
-            return GetDataTypeName(variable.DataType, session);
+            return await GetDataTypeName(variable.DataType, session);
 
         return null;
     }
 
-    private static string? GetDataTypeName(NodeId dataTypeId, Session session)
+    private static async Task<string?> GetDataTypeName(NodeId dataTypeId, Session session)
     {
         if (dataTypeId.IsNullNodeId)
             return null;
@@ -625,7 +631,7 @@ public class OpcUaClientService
 
         try
         {
-            var dataTypeNode = session.ReadNode(dataTypeId);
+            var dataTypeNode = await session.ReadNodeAsync(dataTypeId);
             return dataTypeNode?.DisplayName?.Text ?? dataTypeId.ToString();
         }
         catch
@@ -645,5 +651,10 @@ public class OpcUaClientService
             foreach (var child in Flatten(tag.Children))
                 yield return child;
         }
+    }
+
+    private sealed class BrowseProgressState
+    {
+        public int ScannedNodes { get; set; }
     }
 }
