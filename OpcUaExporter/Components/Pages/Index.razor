@@ -20,9 +20,32 @@
             <h3 class="panel-title">Navigation</h3>
             <nav class="nav-menu">
                 <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
+                <NavLink href="/connection-settings" class="btn btn-ghost nav-link">Connection Settings</NavLink>
                 <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
             </nav>
         </section>
+
+        @if (Opc.PendingCertificates.Any())
+        {
+            <section class="panel">
+                <h3 class="panel-title">Server Certificates</h3>
+                <p class="selection-count">Untrusted certificates detected. Review and trust as needed.</p>
+
+                @foreach (var cert in Opc.PendingCertificates)
+                {
+                    <div class="status-bar status-error" style="margin-bottom:8px;">
+                        <div><strong>@cert.Subject</strong></div>
+                        <div class="mono" style="font-size:12px;">Issuer: @cert.Issuer</div>
+                        <div class="mono" style="font-size:12px;">Thumbprint: @cert.Thumbprint</div>
+                        <div style="font-size:12px;">Valid: @cert.ValidFrom.ToLocalTime():yyyy-MM-dd - @cert.ValidTo.ToLocalTime():yyyy-MM-dd</div>
+                        <div class="btn-row" style="margin-top:8px;">
+                            <button class="btn btn-secondary" @onclick="() => TrustCertificate(cert.Thumbprint)" disabled="@Opc.IsBusy">Trust</button>
+                            <button class="btn btn-ghost" @onclick="() => RejectCertificate(cert.Thumbprint)" disabled="@Opc.IsBusy">Reject</button>
+                        </div>
+                    </div>
+                }
+            </section>
+        }
 
         <!-- Connection profile -->
         <section class="panel">
@@ -224,6 +247,15 @@
         return Task.CompletedTask;
     }
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
+
+    private async Task TrustCertificate(string thumbprint)
+        => await Opc.TrustCertificateAsync(thumbprint);
+
+    private Task RejectCertificate(string thumbprint)
+    {
+        Opc.RejectCertificate(thumbprint);
+        return Task.CompletedTask;
+    }
 
     private async Task Export()
     {

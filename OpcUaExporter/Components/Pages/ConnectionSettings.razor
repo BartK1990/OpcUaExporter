@@ -1,0 +1,167 @@
+@page "/connection-settings"
+@using OpcUaExporter.Models
+@using OpcUaExporter.Services
+@inject OpcUaService Opc
+@implements IDisposable
+
+<div class="app-shell">
+
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <div class="logo">
+                <span class="logo-icon">⬡</span>
+                <span class="logo-text">OPC UA<br><small>Exporter</small></span>
+            </div>
+        </div>
+
+        <section class="panel">
+            <h3 class="panel-title">Navigation</h3>
+            <nav class="nav-menu">
+                <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
+                <NavLink href="/connection-settings" class="btn btn-ghost nav-link">Connection Settings</NavLink>
+                <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
+            </nav>
+        </section>
+
+        <div class="status-bar @(Opc.HasError ? "status-error" : "status-ok")">
+            @Opc.StatusMessage
+        </div>
+    </aside>
+
+    <main class="content">
+        <section class="browser-panel">
+            <div class="content-header">
+                <h2>Connection Settings</h2>
+                <span class="badge">OPC UA</span>
+            </div>
+
+            <div class="settings-grid">
+                <section class="panel settings-panel">
+                    <h3 class="panel-title">Endpoint</h3>
+
+                    <label class="field-label">Server Name</label>
+                    <input class="field-input" @bind="Opc.Profile.Name" />
+
+                    <label class="field-label">Endpoint URL</label>
+                    <input class="field-input" @bind="Opc.Profile.EndpointUrl" placeholder="opc.tcp://192.168.1.10:4840" />
+                </section>
+
+                <section class="panel settings-panel">
+                    <h3 class="panel-title">Security</h3>
+
+                    <label class="field-label">Security Mode</label>
+                    <select class="field-input" @bind="Opc.Profile.SecurityMode">
+                        @foreach (var mode in Opc.SecurityModeOptions)
+                        {
+                            <option value="@mode">@mode</option>
+                        }
+                    </select>
+
+                    <label class="field-label">Security Policy</label>
+                    <select class="field-input" @bind="Opc.Profile.SecurityPolicy">
+                        @foreach (var policy in Opc.SecurityPolicyOptions)
+                        {
+                            <option value="@policy">@PolicyDisplay(policy)</option>
+                        }
+                    </select>
+                </section>
+
+                <section class="panel settings-panel">
+                    <h3 class="panel-title">Authentication</h3>
+
+                    <label class="field-label">Authentication Type</label>
+                    <select class="field-input" @bind="Opc.Profile.AuthenticationType">
+                        @foreach (var type in Opc.AuthenticationOptions)
+                        {
+                            <option value="@type">@type</option>
+                        }
+                    </select>
+
+                    @if (Opc.Profile.AuthenticationType == AuthenticationType.UsernamePassword)
+                    {
+                        <label class="field-label">Username</label>
+                        <input class="field-input" @bind="Opc.Profile.Username" autocomplete="username" />
+
+                        <label class="field-label">Password</label>
+                        <input class="field-input" type="password" @bind="Opc.Profile.Password" autocomplete="current-password" />
+                    }
+                </section>
+            </div>
+
+            @if (_warnings.Count > 0)
+            {
+                <section class="panel settings-panel" style="margin-top: 12px;">
+                    <h3 class="panel-title">Validation Warnings</h3>
+                    @foreach (var warning in _warnings)
+                    {
+                        <div class="status-bar status-error" style="margin-top:6px; padding:8px 10px; border:1px solid var(--border); border-radius: var(--radius);">
+                            @warning
+                        </div>
+                    }
+                </section>
+            }
+
+            <section class="panel settings-panel" style="margin-top: 12px;">
+                <h3 class="panel-title">Connection Check</h3>
+                <button class="btn btn-primary" @onclick="TestConnection" disabled="@(Opc.IsBusy || _warnings.Count > 0)">
+                    @if (Opc.IsBusy)
+                    {
+                        <span class="spinner"></span><span>Testing…</span>
+                    }
+                    else
+                    {
+                        <span>Test Connection</span>
+                    }
+                </button>
+            </section>
+        </section>
+    </main>
+</div>
+
+@code {
+    private List<string> _warnings = new();
+
+    protected override void OnInitialized()
+    {
+        Opc.StateChanged += OnServiceStateChanged;
+        RefreshWarnings();
+    }
+
+    private async Task TestConnection()
+    {
+        RefreshWarnings();
+        if (_warnings.Count > 0)
+            return;
+
+        await Opc.TestConnectionAsync();
+        RefreshWarnings();
+    }
+
+    private void OnServiceStateChanged()
+    {
+        RefreshWarnings();
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    private void RefreshWarnings()
+    {
+        _warnings = Opc.GetConnectionValidationWarnings();
+    }
+
+    private static string PolicyDisplay(string policy)
+        => policy switch
+        {
+            "http://opcfoundation.org/UA/SecurityPolicy#None" => "None",
+            "http://opcfoundation.org/UA/SecurityPolicy#Basic128Rsa15" => "Basic128Rsa15",
+            "http://opcfoundation.org/UA/SecurityPolicy#Basic256" => "Basic256",
+            "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256" => "Basic256Sha256",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep" => "Aes128_Sha256_RsaOaep",
+            "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss" => "Aes256_Sha256_RsaPss",
+            _ => policy
+        };
+
+    public void Dispose()
+    {
+        Opc.StateChanged -= OnServiceStateChanged;
+    }
+}

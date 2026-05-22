@@ -12,11 +12,27 @@ namespace OpcUaExporter.Services;
 /// </summary>
 public class OpcUaService
 {
-    private readonly PythonBridgeService _bridge;
+    private readonly OpcUaClientService _bridge;
     private readonly ILogger<OpcUaService> _logger;
     private CancellationTokenSource? _browseCancellation;
 
     public event Action? StateChanged;
+
+    public IReadOnlyList<ConnectionSecurityMode> SecurityModeOptions { get; } =
+        Enum.GetValues<ConnectionSecurityMode>();
+
+    public IReadOnlyList<string> SecurityPolicyOptions { get; } =
+    [
+        "http://opcfoundation.org/UA/SecurityPolicy#None",
+        "http://opcfoundation.org/UA/SecurityPolicy#Basic128Rsa15",
+        "http://opcfoundation.org/UA/SecurityPolicy#Basic256",
+        "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256",
+        "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep",
+        "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss"
+    ];
+
+    public IReadOnlyList<AuthenticationType> AuthenticationOptions { get; } =
+        Enum.GetValues<AuthenticationType>();
 
     // Connection
     public ConnectionProfile Profile     { get; private set; } = new();
@@ -27,6 +43,7 @@ public class OpcUaService
 
     // Live readings (after Read)
     public List<TagReading> LastReadings  { get; private set; } = new();
+    public List<PendingCertificateInfo> PendingCertificates { get; private set; } = new();
 
     // Status / busy
     public bool   IsBusy       { get; private set; }
@@ -34,7 +51,7 @@ public class OpcUaService
     public string StatusMessage { get; private set; } = "Ready";
     public bool   HasError      { get; private set; }
 
-    public OpcUaService(PythonBridgeService bridge, ILogger<OpcUaService> logger)
+    public OpcUaService(OpcUaClientService bridge, ILogger<OpcUaService> logger)
     {
         _bridge = bridge;
         _logger = logger;
@@ -75,7 +92,8 @@ public class OpcUaService
             await RunSafe(async () =>
             {
                 SetStatus("Connecting and browsing tags…");
-                TagTree      = await _bridge.BrowseAsync(Profile.EndpointUrl, linkedCts.Token);
+                TagTree      = await _bridge.BrowseAsync(Profile, linkedCts.Token);
+                RefreshPendingCertificates();
                 SortTreeByNodeId(TagTree);
                 IsConnected  = true;
                 LastReadings = new();
@@ -112,9 +130,77 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus($"Reading {selected.Count} tag(s)…");
-            LastReadings = await _bridge.ReadAsync(Profile.EndpointUrl, selected, ct);
+            LastReadings = await _bridge.ReadAsync(Profile, selected, ct);
+            RefreshPendingCertificates();
             SetStatus($"Read {LastReadings.Count} tag(s) successfully.");
         });
+    }
+
+    public async Task TestConnectionAsync(CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Testing OPC UA connection…");
+            await _bridge.TestConnectionAsync(Profile, ct);
+            RefreshPendingCertificates();
+            IsConnected = true;
+            SetStatus("Connection test successful.");
+        });
+    }
+
+    public List<string> GetConnectionValidationWarnings()
+    {
+        var warnings = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(Profile.EndpointUrl))
+            warnings.Add("Endpoint URL is required.");
+
+        if (Profile.AuthenticationType == AuthenticationType.UsernamePassword)
+        {
+            if (string.IsNullOrWhiteSpace(Profile.Username))
+                warnings.Add("Username is required for UsernamePassword authentication.");
+
+            if (string.IsNullOrWhiteSpace(Profile.Password))
+                warnings.Add("Password is required for UsernamePassword authentication.");
+        }
+
+        if (string.IsNullOrWhiteSpace(Profile.SecurityPolicy))
+            warnings.Add("Security Policy should be selected.");
+
+        return warnings;
+    }
+
+    public async Task TrustCertificateAsync(string thumbprint, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(thumbprint))
+            return;
+
+        await RunSafe(async () =>
+        {
+            var trusted = await _bridge.TrustPendingCertificateAsync(thumbprint, ct);
+            RefreshPendingCertificates();
+            SetStatus(trusted
+                ? "Certificate trusted. Retry browse/read."
+                : "Certificate was not found in pending list.");
+        });
+    }
+
+    public void RejectCertificate(string thumbprint)
+    {
+        if (string.IsNullOrWhiteSpace(thumbprint))
+            return;
+
+        var rejected = _bridge.RejectPendingCertificate(thumbprint);
+        RefreshPendingCertificates();
+        SetStatus(rejected
+            ? "Certificate rejected."
+            : "Certificate was not found in pending list.");
+    }
+
+    public void RefreshPendingCertificates()
+    {
+        PendingCertificates = _bridge.GetPendingCertificates();
+        Notify();
     }
 
     public async Task SaveProfileAsync(string filePath, CancellationToken ct = default)
@@ -126,7 +212,12 @@ public class OpcUaService
             var profile = new ConnectionProfile
             {
                 Name = Profile.Name,
-                EndpointUrl = Profile.EndpointUrl
+                EndpointUrl = Profile.EndpointUrl,
+                SecurityMode = Profile.SecurityMode,
+                SecurityPolicy = Profile.SecurityPolicy,
+                AuthenticationType = Profile.AuthenticationType,
+                Username = Profile.Username,
+                Password = Profile.Password
             };
 
             var json = JsonSerializer.Serialize(profile, new JsonSerializerOptions
@@ -192,7 +283,7 @@ public class OpcUaService
             if (missingNodeIds.Count > 0)
             {
                 SetStatus($"Reading {missingNodeIds.Count} missing tag(s) before export…");
-                var freshReadings = await _bridge.ReadAsync(Profile.EndpointUrl, missingNodeIds, ct);
+                var freshReadings = await _bridge.ReadAsync(Profile, missingNodeIds, ct);
                 foreach (var reading in freshReadings)
                 {
                     if (!string.IsNullOrWhiteSpace(reading.NodeId))

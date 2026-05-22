@@ -17,17 +17,12 @@
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="8.0.*" />
     <PackageReference Include="CsvHelper" Version="33.*" />
     <PackageReference Include="Newtonsoft.Json" Version="13.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.5.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Client" Version="1.5.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Configuration" Version="1.5.*" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Update="Python\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </Content>
-    <None Update="Python\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
-    </None>
     <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
