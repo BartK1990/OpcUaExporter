@@ -53,30 +53,30 @@ jobs:
           "msix_version=$msixVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
       - name: Restore
-        run: dotnet restore /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter.sln
+        run: dotnet restore "${{ github.workspace }}/OpcUaExporter.sln"
 
       - name: Publish portable
         run: >
-          dotnet publish /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter/OpcUaExporter.csproj
+          dotnet publish "${{ github.workspace }}/OpcUaExporter/OpcUaExporter.csproj"
           -c Release
           --self-contained false
-          -o /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/portable
+          -o "${{ github.workspace }}/artifacts/portable"
 
       - name: Publish win_x64
         run: >
-          dotnet publish /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter/OpcUaExporter.csproj
+          dotnet publish "${{ github.workspace }}/OpcUaExporter/OpcUaExporter.csproj"
           -c Release
           -r win-x64
           --self-contained false
-          -o /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/win_x64
+          -o "${{ github.workspace }}/artifacts/win_x64"
 
       - name: Publish self-contained
         run: >
-          dotnet publish /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter/OpcUaExporter.csproj
+          dotnet publish "${{ github.workspace }}/OpcUaExporter/OpcUaExporter.csproj"
           -c Release
           -r win-x64
           --self-contained true
-          -o /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/self-contained
+          -o "${{ github.workspace }}/artifacts/self-contained"
 
       - name: Build msix package
         shell: pwsh
@@ -92,7 +92,7 @@ jobs:
             throw "makeappx.exe was not found on runner."
           }
 
-          $repoRoot = "/home/runner/work/OpcUaExporter/OpcUaExporter"
+          $repoRoot = "${{ github.workspace }}"
           $msixBuildDir = Join-Path $repoRoot "artifacts/msix-content"
           $msixOutDir = Join-Path $repoRoot "artifacts/msix"
           $winX64Dir = Join-Path $repoRoot "artifacts/win_x64"
@@ -154,7 +154,7 @@ jobs:
       - name: Archive output variants
         shell: pwsh
         run: |
-          $repoRoot = "/home/runner/work/OpcUaExporter/OpcUaExporter"
+          $repoRoot = "${{ github.workspace }}"
           $version = "${{ steps.meta.outputs.version }}"
           $dist = Join-Path $repoRoot "artifacts/dist"
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
@@ -169,10 +169,10 @@ jobs:
         with:
           name: release-${{ steps.meta.outputs.version }}
           path: |
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
@@ -182,7 +182,7 @@ jobs:
           draft: false
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
-            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
