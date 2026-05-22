@@ -2,6 +2,7 @@
 @using OpcUaExporter.Models
 @using OpcUaExporter.Services
 @inject OpcUaService Opc
+@inject IJSRuntime JS
 @implements IDisposable
 
 <div class="app-shell">
@@ -29,7 +30,7 @@
     </aside>
 
     <main class="content">
-        <section class="browser-panel">
+        <section class="browser-panel connection-settings-scroll">
             <div class="content-header">
                 <h2>Connection Settings</h2>
                 <span class="badge">OPC UA</span>
@@ -103,23 +104,72 @@
 
             <section class="panel settings-panel" style="margin-top: 12px;">
                 <h3 class="panel-title">Connection Check</h3>
-                <button class="btn btn-primary" @onclick="TestConnection" disabled="@(Opc.IsBusy || _warnings.Count > 0)">
-                    @if (Opc.IsBusy)
+                <div class="btn-row">
+                    <button class="btn btn-ghost" @onclick="SaveServerProfile" disabled="@Opc.IsBusy">
+                        <span>Save Profile</span>
+                    </button>
+
+                    <button class="btn btn-secondary" @onclick="DiscoverCapabilities" disabled="@(Opc.IsBusy || string.IsNullOrWhiteSpace(Opc.Profile.EndpointUrl))">
+                        @if (Opc.IsBusy)
+                        {
+                            <span class="spinner"></span><span>Working…</span>
+                        }
+                        else
+                        {
+                            <span>Discover Modes</span>
+                        }
+                    </button>
+
+                    <button class="btn btn-primary" @onclick="TestConnection" disabled="@(Opc.IsBusy || _warnings.Count > 0)">
+                        @if (Opc.IsBusy)
+                        {
+                            <span class="spinner"></span><span>Testing…</span>
+                        }
+                        else
+                        {
+                            <span>Test Connection</span>
+                        }
+                    </button>
+                </div>
+            </section>
+
+            @if (_capabilities is not null)
+            {
+                <section class="panel settings-panel" style="margin-top: 12px;">
+                    <h3 class="panel-title">Discovered Server</h3>
+                    <div class="selection-count">@_capabilities.ServerName</div>
+
+                    @if (_capabilities.SecurityOptions.Count == 0)
                     {
-                        <span class="spinner"></span><span>Testing…</span>
+                        <div class="status-bar" style="margin-top:6px; padding:8px 10px; border:1px solid var(--border); border-radius: var(--radius);">
+                            No security combinations were returned.
+                        </div>
                     }
                     else
                     {
-                        <span>Test Connection</span>
+                        @foreach (var option in _capabilities.SecurityOptions)
+                        {
+                            <div class="status-bar" style="margin-top:6px; padding:8px 10px; border:1px solid var(--border); border-radius: var(--radius);">
+                                <div><strong>Mode:</strong> @option.SecurityMode</div>
+                                <div><strong>Policy:</strong> @PolicyDisplay(option.SecurityPolicy)</div>
+                                <div><strong>Auth:</strong> @AuthDisplay(option)</div>
+                                <div class="btn-row" style="margin-top:8px;">
+                                    <button class="btn btn-ghost" @onclick="() => ApplyDiscoveredOption(option)">
+                                        Apply to selections
+                                    </button>
+                                </div>
+                            </div>
+                        }
                     }
-                </button>
-            </section>
+                </section>
+            }
         </section>
     </main>
 </div>
 
 @code {
     private List<string> _warnings = new();
+    private ServerCapabilitiesInfo? _capabilities;
 
     protected override void OnInitialized()
     {
@@ -137,6 +187,29 @@
         RefreshWarnings();
     }
 
+    private async Task DiscoverCapabilities()
+    {
+        _capabilities = await Opc.DiscoverServerCapabilitiesAsync();
+        if (_capabilities is not null)
+            StateHasChanged();
+    }
+
+    private async Task SaveServerProfile()
+    {
+        try
+        {
+            var path = await JS.InvokeAsync<string>("showSaveDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            await Opc.SaveProfileAsync(path);
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
     private void OnServiceStateChanged()
     {
         RefreshWarnings();
@@ -146,6 +219,24 @@
     private void RefreshWarnings()
     {
         _warnings = Opc.GetConnectionValidationWarnings();
+    }
+
+    private void ApplyDiscoveredOption(ServerSecurityOption option)
+    {
+        Opc.Profile.SecurityMode = option.SecurityMode;
+        Opc.Profile.SecurityPolicy = option.SecurityPolicy;
+
+        if (option.SupportsAnonymous)
+        {
+            Opc.Profile.AuthenticationType = AuthenticationType.Anonymous;
+        }
+        else if (option.SupportsUsernamePassword)
+        {
+            Opc.Profile.AuthenticationType = AuthenticationType.UsernamePassword;
+        }
+
+        RefreshWarnings();
+        StateHasChanged();
     }
 
     private static string PolicyDisplay(string policy)
@@ -159,6 +250,16 @@
             "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss" => "Aes256_Sha256_RsaPss",
             _ => policy
         };
+
+    private static string AuthDisplay(ServerSecurityOption option)
+    {
+        var auth = new List<string>();
+        if (option.SupportsAnonymous)
+            auth.Add("Anonymous");
+        if (option.SupportsUsernamePassword)
+            auth.Add("UsernamePassword");
+        return auth.Count == 0 ? "None" : string.Join(", ", auth);
+    }
 
     public void Dispose()
     {

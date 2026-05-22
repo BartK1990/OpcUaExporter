@@ -277,6 +277,12 @@ body {
     min-height: 0;
 }
 
+.connection-settings-scroll {
+    overflow: auto;
+    min-height: 0;
+    padding-right: 4px;
+}
+
 .tag-tree-scroll {
     overflow: auto;
     flex: 1;

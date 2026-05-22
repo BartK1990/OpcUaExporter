@@ -106,6 +106,51 @@ public class OpcUaClientService
         _diagnostics.Add("Connection test completed successfully.");
     }
 
+    public async Task<ServerCapabilitiesInfo> GetServerCapabilitiesAsync(string endpointUrl, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(endpointUrl))
+            throw new InvalidOperationException("Endpoint URL is required.");
+
+        ct.ThrowIfCancellationRequested();
+
+        var discoveryUrl = CoreClientUtils.GetDiscoveryUrl(endpointUrl);
+        using var discoveryClient = DiscoveryClient.Create(discoveryUrl);
+
+        var endpointDescriptions = await discoveryClient.GetEndpointsAsync(new StringCollection(), ct);
+        if (endpointDescriptions is null || endpointDescriptions.Count == 0)
+            throw new InvalidOperationException("No OPC UA endpoints were returned by the server.");
+
+        var serverName = endpointDescriptions
+            .Select(e => e.Server?.ApplicationName?.Text)
+            .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t))
+            ?? endpointUrl;
+
+        var options = endpointDescriptions
+            .GroupBy(e => new
+            {
+                Mode = ToConnectionSecurityMode(e.SecurityMode),
+                Policy = NormalizeSecurityPolicy(e.SecurityPolicyUri)
+            })
+            .Select(g => new ServerSecurityOption
+            {
+                SecurityMode = g.Key.Mode,
+                SecurityPolicy = g.Key.Policy,
+                SupportsAnonymous = g.Any(e => e.UserIdentityTokens.Any(t => t.TokenType == UserTokenType.Anonymous)),
+                SupportsUsernamePassword = g.Any(e => e.UserIdentityTokens.Any(t => t.TokenType == UserTokenType.UserName))
+            })
+            .OrderBy(o => o.SecurityMode)
+            .ThenBy(o => o.SecurityPolicy, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        _diagnostics.Add($"Discovered {options.Count} security option(s) on server '{serverName}'.");
+
+        return new ServerCapabilitiesInfo
+        {
+            ServerName = serverName,
+            SecurityOptions = options
+        };
+    }
+
     public List<PendingCertificateInfo> GetPendingCertificates()
     {
         return _pendingCertificates.Values
@@ -129,15 +174,8 @@ public class OpcUaClientService
         ct.ThrowIfCancellationRequested();
 
         var config = await _configuration.Value;
-        var trustedStorePath = config.SecurityConfiguration.TrustedPeerCertificates.StorePath;
-        if (string.IsNullOrWhiteSpace(trustedStorePath))
-            throw new InvalidOperationException("Trusted peer certificate store path is not configured.");
-
-        Directory.CreateDirectory(trustedStorePath);
-
-        var certBytes = certificate.Export(X509ContentType.Cert);
-        var filePath = Path.Combine(trustedStorePath, $"{certificate.Thumbprint}.der");
-        await File.WriteAllBytesAsync(filePath, certBytes, ct);
+        var trustedStore = config.SecurityConfiguration.TrustedPeerCertificates.OpenStore(null);
+        await trustedStore.AddAsync(certificate, null, ct);
 
         if (!string.IsNullOrWhiteSpace(certificate.Thumbprint))
             _trustedThumbprints[certificate.Thumbprint] = 0;
@@ -168,19 +206,75 @@ public class OpcUaClientService
         var userIdentity = BuildUserIdentity(profile);
 
         _diagnostics.Add($"Connecting to OPC UA endpoint: {endpointUrl} | SecurityMode={selectedEndpoint.SecurityMode} | SecurityPolicy={selectedEndpoint.SecurityPolicyUri} | Auth={profile.AuthenticationType}");
+        LogSelectedEndpointDiagnostics(selectedEndpoint);
+        await LogClientCertificateDiagnosticsAsync(config);
 
-        var session = await Session.Create(
-            config,
-            endpoint,
-            false,
-            "OpcUaExporter",
-            60000,
-            userIdentity,
-            null,
-            ct);
+        Session session;
+        try
+        {
+            session = await Session.Create(
+                config,
+                endpoint,
+                true,
+                "OpcUaExporter",
+                60000,
+                userIdentity,
+                null,
+                ct);
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.Add($"OpenSecureChannel failed: {ex.Message}");
+            _diagnostics.Add($"Selected endpoint details: Url={selectedEndpoint.EndpointUrl}, Mode={selectedEndpoint.SecurityMode}, Policy={selectedEndpoint.SecurityPolicyUri}, Auth={profile.AuthenticationType}");
+            throw;
+        }
 
         _diagnostics.Add("OPC UA session connected.");
         return session;
+    }
+
+    private void LogSelectedEndpointDiagnostics(EndpointDescription endpoint)
+    {
+        var tokenPolicies = endpoint.UserIdentityTokens?
+            .Select(t => $"{t.TokenType} ({NormalizeSecurityPolicy(t.SecurityPolicyUri)})")
+            .ToList() ?? new List<string>();
+
+        _diagnostics.Add($"Endpoint token policies: {(tokenPolicies.Count == 0 ? "none" : string.Join(", ", tokenPolicies))}");
+
+        if (endpoint.ServerCertificate is null || endpoint.ServerCertificate.Length == 0)
+        {
+            _diagnostics.Add("Endpoint server certificate: not provided by endpoint discovery.");
+            return;
+        }
+
+        try
+        {
+            var cert = new X509Certificate2(endpoint.ServerCertificate);
+            _diagnostics.Add($"Endpoint server certificate: Subject='{cert.Subject}', Issuer='{cert.Issuer}', Thumbprint={cert.Thumbprint}, KeySize={cert.PublicKey?.Key?.KeySize}");
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.Add($"Endpoint server certificate parse warning: {ex.Message}");
+        }
+    }
+
+    private async Task LogClientCertificateDiagnosticsAsync(ApplicationConfiguration config)
+    {
+        try
+        {
+            var appCertificate = await config.SecurityConfiguration.ApplicationCertificate.FindAsync(true, "", null, default);
+            if (appCertificate is null)
+            {
+                _diagnostics.Add("Client application certificate: not found.");
+                return;
+            }
+
+            _diagnostics.Add($"Client application certificate: Subject='{appCertificate.Subject}', Thumbprint={appCertificate.Thumbprint}, KeySize={GetCertificateKeySize(appCertificate)}, HasPrivateKey={appCertificate.HasPrivateKey}");
+        }
+        catch (Exception ex)
+        {
+            _diagnostics.Add($"Client application certificate diagnostics failed: {ex.Message}");
+        }
     }
 
     private static UserIdentity BuildUserIdentity(ConnectionProfile profile)
@@ -236,6 +330,13 @@ public class OpcUaClientService
                 $"Endpoint does not support the selected authentication type '{profile.AuthenticationType}'.");
         }
 
+        if (selected.SecurityMode != MessageSecurityMode.None &&
+            (selected.ServerCertificate is null || selected.ServerCertificate.Length == 0))
+        {
+            throw new InvalidOperationException(
+                $"Selected secure endpoint '{selected.EndpointUrl}' did not provide a server certificate in discovery. Try using the exact endpoint URL returned by Discover Modes or reconfigure the server endpoint.");
+        }
+
         return selected;
     }
 
@@ -256,6 +357,16 @@ public class OpcUaClientService
         };
     }
 
+    private static ConnectionSecurityMode ToConnectionSecurityMode(MessageSecurityMode mode)
+    {
+        return mode switch
+        {
+            MessageSecurityMode.Sign => ConnectionSecurityMode.Sign,
+            MessageSecurityMode.SignAndEncrypt => ConnectionSecurityMode.SignAndEncrypt,
+            _ => ConnectionSecurityMode.None
+        };
+    }
+
     private async Task<ApplicationConfiguration> BuildConfigurationAsync()
     {
         var pkiRoot = Path.Combine(
@@ -266,11 +377,13 @@ public class OpcUaClientService
         var trustedPeerStorePath = Path.Combine(pkiRoot, "trusted");
         var trustedIssuerStorePath = Path.Combine(pkiRoot, "issuer");
         var rejectedStorePath = Path.Combine(pkiRoot, "rejected");
+        var ownStorePath = Path.Combine(pkiRoot, "own");
 
         Directory.CreateDirectory(pkiRoot);
         Directory.CreateDirectory(trustedPeerStorePath);
         Directory.CreateDirectory(trustedIssuerStorePath);
         Directory.CreateDirectory(rejectedStorePath);
+        Directory.CreateDirectory(ownStorePath);
 
         var config = new ApplicationConfiguration
         {
@@ -281,8 +394,8 @@ public class OpcUaClientService
             {
                 ApplicationCertificate = new CertificateIdentifier
                 {
-                    StoreType = CertificateStoreType.X509Store,
-                    StorePath = "CurrentUser\\My",
+                    StoreType = CertificateStoreType.Directory,
+                    StorePath = ownStorePath,
                     SubjectName = "CN=OpcUaExporter"
                 },
                 TrustedPeerCertificates = new CertificateTrustList
@@ -303,7 +416,7 @@ public class OpcUaClientService
                 AutoAcceptUntrustedCertificates = false,
                 AddAppCertToTrustedStore = false,
                 RejectSHA1SignedCertificates = false,
-                MinimumCertificateKeySize = 1024
+                MinimumCertificateKeySize = 2048
             },
             TransportQuotas = new TransportQuotas
             {
@@ -344,15 +457,29 @@ public class OpcUaClientService
             ApplicationConfiguration = config
         };
 
-        var hasAppCertificate = await appInstance.CheckApplicationInstanceCertificates(false, 2048);
+        var hasAppCertificate = await appInstance.CheckApplicationInstanceCertificatesAsync(true, 2048, ct: default);
         if (!hasAppCertificate)
             throw new InvalidOperationException("Unable to create or load OPC UA application certificate.");
+
+        var clientCertificate = await config.SecurityConfiguration.ApplicationCertificate.FindAsync(true, "", null, default);
+        var clientKeySize = GetCertificateKeySize(clientCertificate);
+        if (clientKeySize < 2048)
+        {
+            throw new InvalidOperationException(
+                $"Client application certificate key size is {clientKeySize}. Basic256Sha256 typically requires at least 2048. Delete '%LocalAppData%\\OpcUaExporter\\pki\\own' and restart the app to regenerate a stronger certificate.");
+        }
 
         config.CertificateValidator.CertificateValidation += (_, e) =>
         {
             if (e.Certificate is not null &&
                 !string.IsNullOrWhiteSpace(e.Certificate.Thumbprint) &&
                 _trustedThumbprints.ContainsKey(e.Certificate.Thumbprint))
+            {
+                e.Accept = true;
+                return;
+            }
+
+            if (e.Certificate is not null && IsTrustedPeerCertificate(config.SecurityConfiguration, e.Certificate))
             {
                 e.Accept = true;
                 return;
@@ -376,6 +503,47 @@ public class OpcUaClientService
 
         _diagnostics.Add("OPC UA client configuration initialized.");
         return config;
+    }
+
+    private static bool IsTrustedPeerCertificate(SecurityConfiguration securityConfiguration, X509Certificate2 certificate)
+    {
+        if (string.IsNullOrWhiteSpace(certificate.Thumbprint))
+            return false;
+
+        try
+        {
+            var trustedStore = securityConfiguration.TrustedPeerCertificates.OpenStore(null);
+            var trusted = trustedStore
+                .FindByThumbprintAsync(certificate.Thumbprint, default)
+                .GetAwaiter()
+                .GetResult();
+
+            return trusted is not null;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static int GetCertificateKeySize(X509Certificate2? certificate)
+    {
+        if (certificate is null)
+            return 0;
+
+        using var rsa = certificate.GetRSAPublicKey();
+        if (rsa is not null)
+            return rsa.KeySize;
+
+        using var ecdsa = certificate.GetECDsaPublicKey();
+        if (ecdsa is not null)
+            return ecdsa.KeySize;
+
+        using var dsa = certificate.GetDSAPublicKey();
+        if (dsa is not null)
+            return dsa.KeySize;
+
+        return 0;
     }
 
     private async Task<List<OpcTag>> BrowseNodeRecursiveAsync(Session session, NodeId nodeId, CancellationToken ct)

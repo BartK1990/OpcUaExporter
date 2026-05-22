@@ -64,6 +64,20 @@ public class PendingCertificateInfo
     public DateTime ValidTo { get; set; }
 }
 
+public class ServerCapabilitiesInfo
+{
+    public string ServerName { get; set; } = string.Empty;
+    public List<ServerSecurityOption> SecurityOptions { get; set; } = new();
+}
+
+public class ServerSecurityOption
+{
+    public ConnectionSecurityMode SecurityMode { get; set; }
+    public string SecurityPolicy { get; set; } = string.Empty;
+    public bool SupportsAnonymous { get; set; }
+    public bool SupportsUsernamePassword { get; set; }
+}
+
 public enum ConnectionSecurityMode
 {
     None,

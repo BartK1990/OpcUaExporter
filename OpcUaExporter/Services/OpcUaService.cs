@@ -148,6 +148,20 @@ public class OpcUaService
         });
     }
 
+    public async Task<ServerCapabilitiesInfo?> DiscoverServerCapabilitiesAsync(CancellationToken ct = default)
+    {
+        ServerCapabilitiesInfo? result = null;
+
+        await RunSafe(async () =>
+        {
+            SetStatus("Discovering server capabilities…");
+            result = await _bridge.GetServerCapabilitiesAsync(Profile.EndpointUrl, ct);
+            SetStatus($"Discovered capabilities for server '{result.ServerName}'.");
+        });
+
+        return result;
+    }
+
     public List<string> GetConnectionValidationWarnings()
     {
         var warnings = new List<string>();
