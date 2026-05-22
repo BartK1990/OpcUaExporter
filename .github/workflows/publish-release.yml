@@ -1,0 +1,188 @@
+name: Publish release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (for example: 1.2.3)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark GitHub release as pre-release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Resolve version metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $rawVersion = "${{ github.event.inputs.version }}".Trim()
+          if ([string]::IsNullOrWhiteSpace($rawVersion)) {
+            throw "Version input cannot be empty."
+          }
+
+          $normalizedVersion = $rawVersion.TrimStart('v', 'V')
+          $tagName = "v$normalizedVersion"
+
+          $parts = $normalizedVersion.Split('.')
+          if ($parts.Length -lt 3) {
+            throw "Version must include at least major.minor.patch."
+          }
+
+          $msixVersion = "$($parts[0]).$($parts[1]).$($parts[2]).0"
+
+          "version=$normalizedVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "tag=$tagName" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+          "msix_version=$msixVersion" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+
+      - name: Restore
+        run: dotnet restore /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter.sln
+
+      - name: Publish portable
+        run: >
+          dotnet publish /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter/OpcUaExporter.csproj
+          -c Release
+          --self-contained false
+          -o /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/portable
+
+      - name: Publish win_x64
+        run: >
+          dotnet publish /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter/OpcUaExporter.csproj
+          -c Release
+          -r win-x64
+          --self-contained false
+          -o /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/win_x64
+
+      - name: Publish self-contained
+        run: >
+          dotnet publish /home/runner/work/OpcUaExporter/OpcUaExporter/OpcUaExporter/OpcUaExporter.csproj
+          -c Release
+          -r win-x64
+          --self-contained true
+          -o /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/self-contained
+
+      - name: Build msix package
+        shell: pwsh
+        run: |
+          $makeAppx = (Get-Command makeappx.exe -ErrorAction SilentlyContinue).Source
+          if (-not $makeAppx) {
+            $makeAppx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin\*\x64\makeappx.exe" -ErrorAction SilentlyContinue |
+              Sort-Object FullName -Descending |
+              Select-Object -First 1 -ExpandProperty FullName
+          }
+
+          if (-not $makeAppx) {
+            throw "makeappx.exe was not found on runner."
+          }
+
+          $repoRoot = "/home/runner/work/OpcUaExporter/OpcUaExporter"
+          $msixBuildDir = Join-Path $repoRoot "artifacts/msix-content"
+          $msixOutDir = Join-Path $repoRoot "artifacts/msix"
+          $winX64Dir = Join-Path $repoRoot "artifacts/win_x64"
+
+          if (Test-Path $msixBuildDir) {
+            Remove-Item $msixBuildDir -Recurse -Force
+          }
+          New-Item -ItemType Directory -Path $msixBuildDir -Force | Out-Null
+          New-Item -ItemType Directory -Path $msixOutDir -Force | Out-Null
+
+          Copy-Item "$winX64Dir/*" $msixBuildDir -Recurse -Force
+
+          @"
+          <?xml version="1.0" encoding="utf-8"?>
+          <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+                   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+                   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+                   IgnorableNamespaces="uap rescap">
+            <Identity Name="BartK1990.OpcUaExporter"
+                      Publisher="CN=OpcUaExporter"
+                      Version="${{ steps.meta.outputs.msix_version }}" />
+            <Properties>
+              <DisplayName>OpcUaExporter</DisplayName>
+              <PublisherDisplayName>BartK1990</PublisherDisplayName>
+              <Logo>Assets\StoreLogo.png</Logo>
+            </Properties>
+            <Resources>
+              <Resource Language="en-us" />
+            </Resources>
+            <Dependencies>
+              <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.22631.0" />
+            </Dependencies>
+            <Applications>
+              <Application Id="App"
+                           Executable="OpcUaExporter.exe"
+                           EntryPoint="Windows.FullTrustApplication">
+                <uap:VisualElements DisplayName="OpcUaExporter"
+                                    Description="OPC UA exporter"
+                                    BackgroundColor="transparent"
+                                    Square150x150Logo="Assets\Square150x150Logo.png"
+                                    Square44x44Logo="Assets\Square44x44Logo.png" />
+              </Application>
+            </Applications>
+            <Capabilities>
+              <rescap:Capability Name="runFullTrust" />
+            </Capabilities>
+          </Package>
+          "@ | Out-File -FilePath (Join-Path $msixBuildDir "AppxManifest.xml") -Encoding utf8
+
+          $assetsDir = Join-Path $msixBuildDir "Assets"
+          New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
+          [byte[]]$pngBytes = [Convert]::FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0N6WQAAAAASUVORK5CYII=")
+          [System.IO.File]::WriteAllBytes((Join-Path $assetsDir "StoreLogo.png"), $pngBytes)
+          [System.IO.File]::WriteAllBytes((Join-Path $assetsDir "Square150x150Logo.png"), $pngBytes)
+          [System.IO.File]::WriteAllBytes((Join-Path $assetsDir "Square44x44Logo.png"), $pngBytes)
+
+          & $makeAppx pack /d $msixBuildDir /p (Join-Path $msixOutDir "OpcUaExporter_${{ steps.meta.outputs.version }}.msix") /o
+
+      - name: Archive output variants
+        shell: pwsh
+        run: |
+          $repoRoot = "/home/runner/work/OpcUaExporter/OpcUaExporter"
+          $version = "${{ steps.meta.outputs.version }}"
+          $dist = Join-Path $repoRoot "artifacts/dist"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+
+          Compress-Archive -Path (Join-Path $repoRoot "artifacts/portable/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-portable.zip") -Force
+          Compress-Archive -Path (Join-Path $repoRoot "artifacts/win_x64/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-win_x64.zip") -Force
+          Compress-Archive -Path (Join-Path $repoRoot "artifacts/self-contained/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-self-contained.zip") -Force
+          Copy-Item (Join-Path $repoRoot "artifacts/msix/OpcUaExporter_${{ steps.meta.outputs.version }}.msix") $dist -Force
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ steps.meta.outputs.version }}
+          path: |
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: Release ${{ steps.meta.outputs.tag }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease }}
+          files: |
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
+            /home/runner/work/OpcUaExporter/OpcUaExporter/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
