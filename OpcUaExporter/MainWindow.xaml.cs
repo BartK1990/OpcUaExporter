@@ -1,5 +1,6 @@
 using System.Windows;
 using Microsoft.Win32;
+using System.Windows.Threading;
 
 namespace OpcUaExporter;
 
@@ -41,6 +42,44 @@ public partial class MainWindow : Window
 
             if (dlg.ShowDialog() == true)
                 result = dlg.FileName;
+        });
+
+        return Task.FromResult(result);
+    }
+
+    [Microsoft.JSInterop.JSInvokable("ShowOpenDialogAsync")]
+    public static Task<string> ShowOpenDialogAsync(string filter)
+    {
+        string result = string.Empty;
+
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            var dlg = new OpenFileDialog
+            {
+                Filter = filter,
+                CheckFileExists = true,
+                Multiselect = false
+            };
+
+            if (dlg.ShowDialog() == true)
+                result = dlg.FileName;
+        });
+
+        return Task.FromResult(result);
+    }
+
+    [Microsoft.JSInterop.JSInvokable("ConfirmAsync")]
+    public static Task<bool> ConfirmAsync(string message)
+    {
+        bool result = false;
+
+        System.Windows.Application.Current.Dispatcher.Invoke(() =>
+        {
+            result = MessageBox.Show(
+                message,
+                "OPC UA Exporter",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Question) == MessageBoxResult.Yes;
         });
 
         return Task.FromResult(result);

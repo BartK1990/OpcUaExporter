@@ -1,5 +1,8 @@
 using Microsoft.Extensions.Logging;
 using OpcUaExporter.Models;
+using System.Text.Json;
+using System.Text;
+using System.IO;
 
 namespace OpcUaExporter.Services;
 
@@ -9,10 +12,27 @@ namespace OpcUaExporter.Services;
 /// </summary>
 public class OpcUaService
 {
-    private readonly PythonBridgeService _bridge;
+    private readonly OpcUaClientService _bridge;
     private readonly ILogger<OpcUaService> _logger;
+    private CancellationTokenSource? _browseCancellation;
 
     public event Action? StateChanged;
+
+    public IReadOnlyList<ConnectionSecurityMode> SecurityModeOptions { get; } =
+        Enum.GetValues<ConnectionSecurityMode>();
+
+    public IReadOnlyList<string> SecurityPolicyOptions { get; } =
+    [
+        "http://opcfoundation.org/UA/SecurityPolicy#None",
+        "http://opcfoundation.org/UA/SecurityPolicy#Basic128Rsa15",
+        "http://opcfoundation.org/UA/SecurityPolicy#Basic256",
+        "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256",
+        "http://opcfoundation.org/UA/SecurityPolicy#Aes128_Sha256_RsaOaep",
+        "http://opcfoundation.org/UA/SecurityPolicy#Aes256_Sha256_RsaPss"
+    ];
+
+    public IReadOnlyList<AuthenticationType> AuthenticationOptions { get; } =
+        Enum.GetValues<AuthenticationType>();
 
     // Connection
     public ConnectionProfile Profile     { get; private set; } = new();
@@ -23,16 +43,31 @@ public class OpcUaService
 
     // Live readings (after Read)
     public List<TagReading> LastReadings  { get; private set; } = new();
+    public List<PendingCertificateInfo> PendingCertificates { get; private set; } = new();
 
     // Status / busy
     public bool   IsBusy       { get; private set; }
+    public bool   IsBrowsing   { get; private set; }
     public string StatusMessage { get; private set; } = "Ready";
     public bool   HasError      { get; private set; }
 
-    public OpcUaService(PythonBridgeService bridge, ILogger<OpcUaService> logger)
+    public OpcUaService(OpcUaClientService bridge, ILogger<OpcUaService> logger)
     {
         _bridge = bridge;
         _logger = logger;
+    }
+
+    private static string LastProfilePointerPath
+    {
+        get
+        {
+            var dir = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "OpcUaExporter");
+
+            Directory.CreateDirectory(dir);
+            return Path.Combine(dir, "last-profile.txt");
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -47,15 +82,40 @@ public class OpcUaService
 
     public async Task BrowseAsync(CancellationToken ct = default)
     {
-        await RunSafe(async () =>
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _browseCancellation = linkedCts;
+        IsBrowsing = true;
+        Notify();
+
+        try
         {
-            SetStatus("Connecting and browsing tags…");
-            TagTree      = await _bridge.BrowseAsync(Profile.EndpointUrl, ct);
-            SortTreeByNodeId(TagTree);
-            IsConnected  = true;
-            LastReadings = new();
-            SetStatus($"Browsed {FlatCount(TagTree)} variable tags.");
-        });
+            await RunSafe(async () =>
+            {
+                SetStatus("Connecting and browsing tags…");
+                TagTree      = await _bridge.BrowseAsync(Profile, linkedCts.Token);
+                RefreshPendingCertificates();
+                SortTreeByNodeId(TagTree);
+                IsConnected  = true;
+                LastReadings = new();
+                SetStatus($"Browsed {FlatCount(TagTree)} variable tags.");
+            }, "Browse canceled.");
+        }
+        finally
+        {
+            IsBrowsing = false;
+            if (ReferenceEquals(_browseCancellation, linkedCts))
+                _browseCancellation = null;
+            Notify();
+        }
+    }
+
+    public void CancelBrowse()
+    {
+        if (!IsBrowsing)
+            return;
+
+        SetStatus("Canceling browse…");
+        _browseCancellation?.Cancel();
     }
 
     public async Task ReadSelectedAsync(CancellationToken ct = default)
@@ -70,9 +130,149 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus($"Reading {selected.Count} tag(s)…");
-            LastReadings = await _bridge.ReadAsync(Profile.EndpointUrl, selected, ct);
+            LastReadings = await _bridge.ReadAsync(Profile, selected, ct);
+            RefreshPendingCertificates();
             SetStatus($"Read {LastReadings.Count} tag(s) successfully.");
         });
+    }
+
+    public async Task TestConnectionAsync(CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Testing OPC UA connection…");
+            await _bridge.TestConnectionAsync(Profile, ct);
+            RefreshPendingCertificates();
+            IsConnected = true;
+            SetStatus("Connection test successful.");
+        });
+    }
+
+    public async Task<ServerCapabilitiesInfo?> DiscoverServerCapabilitiesAsync(CancellationToken ct = default)
+    {
+        ServerCapabilitiesInfo? result = null;
+
+        await RunSafe(async () =>
+        {
+            SetStatus("Discovering server capabilities…");
+            result = await _bridge.GetServerCapabilitiesAsync(Profile.EndpointUrl, ct);
+            SetStatus($"Discovered capabilities for server '{result.ServerName}'.");
+        });
+
+        return result;
+    }
+
+    public List<string> GetConnectionValidationWarnings()
+    {
+        var warnings = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(Profile.EndpointUrl))
+            warnings.Add("Endpoint URL is required.");
+
+        if (Profile.AuthenticationType == AuthenticationType.UsernamePassword)
+        {
+            if (string.IsNullOrWhiteSpace(Profile.Username))
+                warnings.Add("Username is required for UsernamePassword authentication.");
+
+            if (string.IsNullOrWhiteSpace(Profile.Password))
+                warnings.Add("Password is required for UsernamePassword authentication.");
+        }
+
+        if (string.IsNullOrWhiteSpace(Profile.SecurityPolicy))
+            warnings.Add("Security Policy should be selected.");
+
+        return warnings;
+    }
+
+    public async Task TrustCertificateAsync(string thumbprint, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(thumbprint))
+            return;
+
+        await RunSafe(async () =>
+        {
+            var trusted = await _bridge.TrustPendingCertificateAsync(thumbprint, ct);
+            RefreshPendingCertificates();
+            SetStatus(trusted
+                ? "Certificate trusted. Retry browse/read."
+                : "Certificate was not found in pending list.");
+        });
+    }
+
+    public void RejectCertificate(string thumbprint)
+    {
+        if (string.IsNullOrWhiteSpace(thumbprint))
+            return;
+
+        var rejected = _bridge.RejectPendingCertificate(thumbprint);
+        RefreshPendingCertificates();
+        SetStatus(rejected
+            ? "Certificate rejected."
+            : "Certificate was not found in pending list.");
+    }
+
+    public void RefreshPendingCertificates()
+    {
+        PendingCertificates = _bridge.GetPendingCertificates();
+        Notify();
+    }
+
+    public async Task SaveProfileAsync(string filePath, CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Saving server profile…");
+
+            var profile = new ConnectionProfile
+            {
+                Name = Profile.Name,
+                EndpointUrl = Profile.EndpointUrl,
+                SecurityMode = Profile.SecurityMode,
+                SecurityPolicy = Profile.SecurityPolicy,
+                AuthenticationType = Profile.AuthenticationType,
+                Username = Profile.Username,
+                Password = Profile.Password
+            };
+
+            var json = JsonSerializer.Serialize(profile, new JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+
+            await File.WriteAllTextAsync(filePath, json, ct);
+            SaveLastProfilePath(filePath);
+
+            SetStatus($"Profile saved: {filePath}");
+        });
+    }
+
+    public async Task LoadProfileAsync(string filePath, CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Loading server profile…");
+
+            var json = await File.ReadAllTextAsync(filePath, ct);
+            var loaded = JsonSerializer.Deserialize<ConnectionProfile>(json)
+                         ?? throw new InvalidOperationException("Invalid profile file.");
+
+            Profile = loaded;
+            SaveLastProfilePath(filePath);
+
+            SetStatus($"Profile loaded: {filePath}");
+        });
+    }
+
+    public string? GetExistingLastProfilePath()
+    {
+        if (!File.Exists(LastProfilePointerPath))
+            return null;
+
+        var path = File.ReadAllText(LastProfilePointerPath).Trim();
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return null;
+
+        return path;
     }
 
     public async Task ExportAsync(ExportOptions options, CancellationToken ct = default)
@@ -87,7 +287,33 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus($"Exporting {selected.Count} tag(s)…");
-            var path = await _bridge.ExportAsync(Profile.EndpointUrl, selected, options, ct);
+            var selectedSet = selected.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var cachedByNodeId = LastReadings
+                .Where(r => !string.IsNullOrWhiteSpace(r.NodeId))
+                .GroupBy(r => r.NodeId, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+
+            var missingNodeIds = selected.Where(id => !cachedByNodeId.ContainsKey(id)).ToList();
+            if (missingNodeIds.Count > 0)
+            {
+                SetStatus($"Reading {missingNodeIds.Count} missing tag(s) before export…");
+                var freshReadings = await _bridge.ReadAsync(Profile, missingNodeIds, ct);
+                foreach (var reading in freshReadings)
+                {
+                    if (!string.IsNullOrWhiteSpace(reading.NodeId))
+                        cachedByNodeId[reading.NodeId] = reading;
+                }
+
+                LastReadings = cachedByNodeId.Values.ToList();
+                Notify();
+            }
+
+            var rowsToExport = selected
+                .Where(id => cachedByNodeId.ContainsKey(id))
+                .Select(id => cachedByNodeId[id])
+                .ToList();
+
+            var path = await WriteExportFileAsync(options, rowsToExport, ct);
             SetStatus($"Exported to: {path}");
         });
     }
@@ -123,7 +349,7 @@ public class OpcUaService
     // Helpers
     // -----------------------------------------------------------------------
 
-    private async Task RunSafe(Func<Task> action)
+    private async Task RunSafe(Func<Task> action, string? canceledMessage = null)
     {
         IsBusy   = true;
         HasError = false;
@@ -131,6 +357,10 @@ public class OpcUaService
         try
         {
             await action();
+        }
+        catch (OperationCanceledException)
+        {
+            SetStatus(canceledMessage ?? "Operation canceled.");
         }
         catch (Exception ex)
         {
@@ -153,6 +383,11 @@ public class OpcUaService
 
     private void Notify() => StateChanged?.Invoke();
 
+    private static void SaveLastProfilePath(string filePath)
+    {
+        File.WriteAllText(LastProfilePointerPath, filePath);
+    }
+
     private static IEnumerable<OpcTag> FlattenAll(IEnumerable<OpcTag> tags)
     {
         foreach (var t in tags)
@@ -172,5 +407,59 @@ public class OpcUaService
 
         foreach (var tag in tags)
             SortTreeByNodeId(tag.Children);
+    }
+
+    private static async Task<string> WriteExportFileAsync(ExportOptions options, List<TagReading> rows, CancellationToken ct)
+    {
+        switch (options.Format)
+        {
+            case ExportFormat.Json:
+                var json = JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true });
+                await File.WriteAllTextAsync(options.OutputPath, json, ct);
+                break;
+
+            case ExportFormat.Csv:
+            default:
+                var csv = BuildCsv(rows);
+                await File.WriteAllTextAsync(options.OutputPath, csv, ct);
+                break;
+        }
+
+        return options.OutputPath;
+    }
+
+    private static string BuildCsv(IEnumerable<TagReading> rows)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Display Name,Node ID,Value,Data Type,Quality,Timestamp");
+
+        foreach (var r in rows)
+        {
+            sb.Append(EscapeCsv(r.DisplayName));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.NodeId));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.Error ?? r.Value?.ToString()));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.DataType));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.Quality));
+            sb.Append(',');
+            sb.Append(EscapeCsv(r.Timestamp));
+            sb.AppendLine();
+        }
+
+        return sb.ToString();
+    }
+
+    private static string EscapeCsv(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return string.Empty;
+
+        if (!value.Contains(',') && !value.Contains('"') && !value.Contains('\n') && !value.Contains('\r'))
+            return value;
+
+        return $"\"{value.Replace("\"", "\"\"")}\"";
     }
 }

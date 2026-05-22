@@ -241,6 +241,9 @@ body {
     overflow: hidden;
     background: var(--bg-0);
     padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
 }
 
 .content-split {
@@ -252,6 +255,12 @@ body {
 .browser-panel,
 .live-panel {
     min-height: 0;
+}
+
+.browser-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
 }
 
 .content-split .browser-panel {
@@ -266,6 +275,12 @@ body {
     display: flex;
     flex-direction: column;
     min-height: 0;
+}
+
+.connection-settings-scroll {
+    overflow: auto;
+    min-height: 0;
+    padding-right: 4px;
 }
 
 .tag-tree-scroll {
@@ -385,7 +400,8 @@ body {
 
 .tag-name {
     font-size: 13px;
-    flex: 1;
+    flex: 0 1 auto;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -404,7 +420,7 @@ body {
 .folder-actions {
     display: inline-flex;
     gap: 4px;
-    margin-right: 8px;
+    margin-left: 4px;
 }
 
 .folder-action-btn {

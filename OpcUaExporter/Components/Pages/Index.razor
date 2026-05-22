@@ -20,9 +20,32 @@
             <h3 class="panel-title">Navigation</h3>
             <nav class="nav-menu">
                 <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
+                <NavLink href="/connection-settings" class="btn btn-ghost nav-link">Connection Settings</NavLink>
                 <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
             </nav>
         </section>
+
+        @if (Opc.PendingCertificates.Any())
+        {
+            <section class="panel">
+                <h3 class="panel-title">Server Certificates</h3>
+                <p class="selection-count">Untrusted certificates detected. Review and trust as needed.</p>
+
+                @foreach (var cert in Opc.PendingCertificates)
+                {
+                    <div class="status-bar status-error" style="margin-bottom:8px;">
+                        <div><strong>@cert.Subject</strong></div>
+                        <div class="mono" style="font-size:12px;">Issuer: @cert.Issuer</div>
+                        <div class="mono" style="font-size:12px;">Thumbprint: @cert.Thumbprint</div>
+                        <div style="font-size:12px;">Valid: @cert.ValidFrom.ToLocalTime():yyyy-MM-dd - @cert.ValidTo.ToLocalTime():yyyy-MM-dd</div>
+                        <div class="btn-row" style="margin-top:8px;">
+                            <button class="btn btn-secondary" @onclick="() => TrustCertificate(cert.Thumbprint)" disabled="@Opc.IsBusy">Trust</button>
+                            <button class="btn btn-ghost" @onclick="() => RejectCertificate(cert.Thumbprint)" disabled="@Opc.IsBusy">Reject</button>
+                        </div>
+                    </div>
+                }
+            </section>
+        }
 
         <!-- Connection profile -->
         <section class="panel">
@@ -45,6 +68,18 @@
                     <span>⟳ Browse Tags</span>
                 }
             </button>
+
+            @if (Opc.IsBrowsing)
+            {
+                <button class="btn btn-ghost" @onclick="CancelBrowse">
+                    ✕ Cancel Browse
+                </button>
+            }
+
+            <div class="btn-row">
+                <button class="btn btn-ghost" @onclick="SaveServerProfile" disabled="@Opc.IsBusy">Save Profile</button>
+                <button class="btn btn-ghost" @onclick="LoadServerProfile" disabled="@Opc.IsBusy">Load Profile</button>
+            </div>
         </section>
 
         <!-- Selection actions -->
@@ -166,6 +201,8 @@
 </div>
 
 @code {
+    private static bool _startupProfilePromptShown;
+
     private string _exportFormat = "Csv";
     private string _exportPath   = string.Empty;
 
@@ -177,8 +214,48 @@
         Opc.StateChanged += StateHasChanged;
     }
 
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _startupProfilePromptShown)
+            return;
+
+        _startupProfilePromptShown = true;
+
+        var lastProfilePath = Opc.GetExistingLastProfilePath();
+        if (string.IsNullOrWhiteSpace(lastProfilePath))
+            return;
+
+        try
+        {
+            var shouldLoad = await JS.InvokeAsync<bool>("showConfirm", $"Load last saved server profile?\n{lastProfilePath}");
+            if (shouldLoad)
+            {
+                await Opc.LoadProfileAsync(lastProfilePath);
+                StateHasChanged();
+            }
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
     private async Task Browse()        => await Opc.BrowseAsync();
+    private Task CancelBrowse()
+    {
+        Opc.CancelBrowse();
+        return Task.CompletedTask;
+    }
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
+
+    private async Task TrustCertificate(string thumbprint)
+        => await Opc.TrustCertificateAsync(thumbprint);
+
+    private Task RejectCertificate(string thumbprint)
+    {
+        Opc.RejectCertificate(thumbprint);
+        return Task.CompletedTask;
+    }
 
     private async Task Export()
     {
@@ -204,6 +281,39 @@
                 _exportPath = path;
                 StateHasChanged();
             }
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private async Task SaveServerProfile()
+    {
+        try
+        {
+            var path = await JS.InvokeAsync<string>("showSaveDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            await Opc.SaveProfileAsync(path);
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private async Task LoadServerProfile()
+    {
+        try
+        {
+            var path = await JS.InvokeAsync<string>("showOpenDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
+            if (string.IsNullOrWhiteSpace(path))
+                return;
+
+            await Opc.LoadProfileAsync(path);
+            StateHasChanged();
         }
         catch
         {
