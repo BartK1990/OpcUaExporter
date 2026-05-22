@@ -146,12 +146,13 @@ jobs:
           New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
           # Minimal placeholder icon files required by AppxManifest for packaging.
           # Replace these with real branded assets when preparing production MSIX builds.
+          Write-Warning "Using placeholder MSIX icon assets. Replace these with production icons before shipping a production MSIX."
           [byte[]]$pngBytes = [Convert]::FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0N6WQAAAAASUVORK5CYII=")
           [System.IO.File]::WriteAllBytes((Join-Path $assetsDir "StoreLogo.png"), $pngBytes)
           [System.IO.File]::WriteAllBytes((Join-Path $assetsDir "Square150x150Logo.png"), $pngBytes)
           [System.IO.File]::WriteAllBytes((Join-Path $assetsDir "Square44x44Logo.png"), $pngBytes)
 
-          & $makeAppx pack /d $msixBuildDir /p (Join-Path $msixOutDir "OpcUaExporter_${{ steps.meta.outputs.version }}.msix") /o
+          & $makeAppx pack /d $msixBuildDir /p (Join-Path $msixOutDir "OpcUaExporter-${{ steps.meta.outputs.version }}.msix") /o
 
       - name: Archive output variants
         shell: pwsh
@@ -164,7 +165,7 @@ jobs:
           Compress-Archive -Path (Join-Path $repoRoot "artifacts/portable/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-portable.zip") -Force
           Compress-Archive -Path (Join-Path $repoRoot "artifacts/win_x64/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-win_x64.zip") -Force
           Compress-Archive -Path (Join-Path $repoRoot "artifacts/self-contained/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-self-contained.zip") -Force
-          Copy-Item (Join-Path $repoRoot "artifacts/msix/OpcUaExporter_${{ steps.meta.outputs.version }}.msix") $dist -Force
+          Copy-Item (Join-Path $repoRoot "artifacts/msix/OpcUaExporter-${{ steps.meta.outputs.version }}.msix") $dist -Force
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -174,7 +175,7 @@ jobs:
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
-            ${{ github.workspace }}/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}.msix
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
@@ -187,4 +188,4 @@ jobs:
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
-            ${{ github.workspace }}/artifacts/dist/OpcUaExporter_${{ steps.meta.outputs.version }}.msix
+            ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}.msix
