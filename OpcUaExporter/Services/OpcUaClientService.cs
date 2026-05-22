@@ -211,7 +211,8 @@ public class OpcUaClientService
         Session session;
         try
         {
-            session = await Session.Create(
+            var sessionFactory = new DefaultSessionFactory(config.CreateMessageContext().Telemetry);
+            var createdSession = await sessionFactory.CreateAsync(
                 config,
                 endpoint,
                 true,
@@ -220,6 +221,9 @@ public class OpcUaClientService
                 userIdentity,
                 null,
                 ct);
+
+            session = createdSession as Session
+                ?? throw new InvalidOperationException("Session factory returned an unsupported session implementation.");
         }
         catch (Exception ex)
         {
@@ -551,31 +555,19 @@ public class OpcUaClientService
         ct.ThrowIfCancellationRequested();
 
         var references = await session.FetchReferencesAsync(nodeId, ct: ct);
+        var forwardChildren = references
+            .Where(r => r.IsForward)
+            .Select(r => (Reference: r, NodeId: ExpandedNodeId.ToNodeId(r.NodeId, session.NamespaceUris)))
+            .Where(x => x.NodeId is not null)
+            .Select(x => (x.Reference, NodeId: x.NodeId!))
+            .ToList();
+
+        var variableDataTypes = await ReadVariableDataTypesAsync(session, forwardChildren, ct);
         var children = new List<OpcTag>();
 
-        foreach (var reference in references)
+        foreach (var (reference, childNodeId) in forwardChildren)
         {
             ct.ThrowIfCancellationRequested();
-
-            if (!reference.IsForward)
-                continue;
-
-            var childNodeId = ExpandedNodeId.ToNodeId(reference.NodeId, session.NamespaceUris);
-            if (childNodeId is null)
-                continue;
-
-            Node? node;
-            try
-            {
-                node = await session.ReadNodeAsync(childNodeId, ct);
-            }
-            catch
-            {
-                continue;
-            }
-
-            if (node is null)
-                continue;
 
             progress.ScannedNodes++;
             if (progress.ScannedNodes % BrowseProgressLogInterval == 0)
@@ -586,26 +578,96 @@ public class OpcUaClientService
             var tag = new OpcTag
             {
                 NodeId = childNodeId.ToString(),
-                BrowseName = node.BrowseName?.ToString() ?? string.Empty,
-                DisplayName = node.DisplayName?.Text ?? childNodeId.ToString(),
-                NodeClass = node.NodeClass.ToString()
+                BrowseName = reference.BrowseName?.ToString() ?? string.Empty,
+                DisplayName = reference.DisplayName?.Text ?? childNodeId.ToString(),
+                NodeClass = reference.NodeClass.ToString()
             };
 
-            if (node is VariableNode variable)
+            if (reference.NodeClass == NodeClass.Variable &&
+                variableDataTypes.TryGetValue(tag.NodeId, out var dataTypeId) &&
+                dataTypeId is not null)
             {
-                tag.DataType = await GetDataTypeName(variable.DataType, session);
+                tag.DataType = await GetDataTypeNameCachedAsync(dataTypeId, session, progress);
             }
 
-            if (node.NodeClass is NodeClass.Object or NodeClass.Variable)
+            if (reference.NodeClass is NodeClass.Object or NodeClass.Variable)
             {
-                var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, ct);
-                tag.Children = nested;
+                try
+                {
+                    var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, ct);
+                    tag.Children = nested;
+                }
+                catch
+                {
+                    tag.Children = [];
+                }
             }
 
             children.Add(tag);
         }
 
         return children;
+    }
+
+    private static async Task<Dictionary<string, NodeId>> ReadVariableDataTypesAsync(
+        Session session,
+        List<(ReferenceDescription Reference, NodeId NodeId)> children,
+        CancellationToken ct)
+    {
+        var variableChildren = children
+            .Where(c => c.Reference.NodeClass == NodeClass.Variable)
+            .ToList();
+
+        if (variableChildren.Count == 0)
+            return new Dictionary<string, NodeId>(StringComparer.Ordinal);
+
+        var requests = new ReadValueIdCollection(variableChildren.Count);
+        foreach (var child in variableChildren)
+        {
+            requests.Add(new ReadValueId
+            {
+                NodeId = child.NodeId,
+                AttributeId = Attributes.DataType
+            });
+        }
+
+        var response = await session.ReadAsync(
+            null,
+            0,
+            TimestampsToReturn.Neither,
+            requests,
+            ct);
+
+        var map = new Dictionary<string, NodeId>(StringComparer.Ordinal);
+        var results = response?.Results;
+        if (results is null)
+            return map;
+
+        for (var i = 0; i < variableChildren.Count && i < results.Count; i++)
+        {
+            var result = results[i];
+            if (result is null || StatusCode.IsBad(result.StatusCode))
+                continue;
+
+            var dataTypeId = result.Value as NodeId;
+            if (dataTypeId is null)
+                continue;
+
+            map[variableChildren[i].NodeId.ToString()] = dataTypeId;
+        }
+
+        return map;
+    }
+
+    private static async Task<string?> GetDataTypeNameCachedAsync(NodeId dataTypeId, Session session, BrowseProgressState progress)
+    {
+        var key = dataTypeId.ToString();
+        if (progress.DataTypeNameCache.TryGetValue(key, out var cached))
+            return cached;
+
+        var resolved = await GetDataTypeName(dataTypeId, session);
+        progress.DataTypeNameCache[key] = resolved;
+        return resolved;
     }
 
     private static async Task<string?> TryGetDataTypeName(Node? node, Session session)
@@ -656,5 +718,7 @@ public class OpcUaClientService
     private sealed class BrowseProgressState
     {
         public int ScannedNodes { get; set; }
+
+        public Dictionary<string, string?> DataTypeNameCache { get; } = new(StringComparer.Ordinal);
     }
 }
