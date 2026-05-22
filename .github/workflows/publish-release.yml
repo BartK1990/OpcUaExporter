@@ -146,6 +146,7 @@ jobs:
           New-Item -ItemType Directory -Path $assetsDir -Force | Out-Null
           # Minimal placeholder icon files required by AppxManifest for packaging.
           # Replace these with real branded assets when preparing production MSIX builds.
+          # Note: the warning below appears only during workflow execution in CI logs.
           Write-Warning "Using placeholder MSIX icon assets. Replace these with production icons before shipping a production MSIX."
           [byte[]]$pngBytes = [Convert]::FromBase64String("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO0N6WQAAAAASUVORK5CYII=")
           [System.IO.File]::WriteAllBytes((Join-Path $assetsDir "StoreLogo.png"), $pngBytes)
