@@ -43,12 +43,20 @@
     @if (_expanded && Tag.Children.Any())
     {
         <div class="tag-children">
-            @foreach (var child in Tag.Children)
+            @foreach (var child in VisibleChildren)
             {
                 <TagNode Tag="child"
+                         @key="child.NodeId"
                          OnToggle="OnToggle"
                          OnSelectAllInFolder="OnSelectAllInFolder"
                          OnSelectNoneInFolder="OnSelectNoneInFolder" />
+            }
+
+            @if (HasMoreChildren)
+            {
+                <button type="button" class="btn btn-ghost" @onclick="ShowMoreChildren">
+                    Load more (@(Tag.Children.Count - _visibleChildrenCount) remaining)
+                </button>
             }
         </div>
     }
@@ -60,12 +68,23 @@
     [Parameter] public EventCallback<OpcTag> OnSelectAllInFolder { get; set; }
     [Parameter] public EventCallback<OpcTag> OnSelectNoneInFolder { get; set; }
 
-    private bool _expanded = true;   // objects start expanded by default
+    private const int ChildBatchSize = 200;
+
+    private bool _expanded = false;
+    private int _visibleChildrenCount = ChildBatchSize;
+
+    private IEnumerable<OpcTag> VisibleChildren => Tag.Children.Take(_visibleChildrenCount);
+    private bool HasMoreChildren => Tag.Children.Count > _visibleChildrenCount;
 
     private void Toggle()
     {
         if (Tag.Children.Any())
             _expanded = !_expanded;
+    }
+
+    private void ShowMoreChildren()
+    {
+        _visibleChildrenCount = Math.Min(Tag.Children.Count, _visibleChildrenCount + ChildBatchSize);
     }
 
     private string NodeIcon => Tag.NodeClass switch

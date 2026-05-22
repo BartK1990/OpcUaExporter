@@ -36,6 +36,7 @@ public class OpcUaClientService
 
         var rootNodeId = ObjectIds.ObjectsFolder;
         var progress = new BrowseProgressState();
+        progress.VisitedNodeIds.Add(rootNodeId.ToString());
 
         _diagnostics.Add("Browse started.");
         var tags = await BrowseNodeRecursiveAsync(session, rootNodeId, progress, ct);
@@ -569,6 +570,9 @@ public class OpcUaClientService
         {
             ct.ThrowIfCancellationRequested();
 
+            var childNodeIdText = childNodeId.ToString();
+            var isFirstVisit = progress.VisitedNodeIds.Add(childNodeIdText);
+
             progress.ScannedNodes++;
             if (progress.ScannedNodes % BrowseProgressLogInterval == 0)
             {
@@ -577,7 +581,7 @@ public class OpcUaClientService
 
             var tag = new OpcTag
             {
-                NodeId = childNodeId.ToString(),
+                NodeId = childNodeIdText,
                 BrowseName = reference.BrowseName?.ToString() ?? string.Empty,
                 DisplayName = reference.DisplayName?.Text ?? childNodeId.ToString(),
                 NodeClass = reference.NodeClass.ToString()
@@ -590,7 +594,7 @@ public class OpcUaClientService
                 tag.DataType = await GetDataTypeNameCachedAsync(dataTypeId, session, progress);
             }
 
-            if (reference.NodeClass is NodeClass.Object or NodeClass.Variable)
+            if (isFirstVisit && reference.NodeClass is NodeClass.Object or NodeClass.Variable)
             {
                 try
                 {
@@ -720,5 +724,7 @@ public class OpcUaClientService
         public int ScannedNodes { get; set; }
 
         public Dictionary<string, string?> DataTypeNameCache { get; } = new(StringComparer.Ordinal);
+
+        public HashSet<string> VisitedNodeIds { get; } = new(StringComparer.Ordinal);
     }
 }
