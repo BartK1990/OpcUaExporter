@@ -5,13 +5,17 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
-    <ApplicationIcon>app.ico</ApplicationIcon>
+    <ApplicationIcon>wwwroot/app.ico</ApplicationIcon>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>OpcUaExporter</RootNamespace>
     <AssemblyName>OpcUaExporter</AssemblyName>
     <!-- Required so WPF builds alongside Razor without conflict -->
     <StartupObject>OpcUaExporter.App</StartupObject>
   </PropertyGroup>
+
+  <ItemGroup>
+    <Content Remove="wwwroot\app.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" Version="8.0.*" />
@@ -24,13 +28,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Resource Include="wwwroot\app.ico" />
+
     <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-  </ItemGroup>
-
-  <ItemGroup>
-    <Resource Include="app.ico" />
   </ItemGroup>
 
 </Project>

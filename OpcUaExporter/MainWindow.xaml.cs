@@ -1,6 +1,5 @@
-using System.Windows;
 using Microsoft.Win32;
-using System.Windows.Threading;
+using System.Windows;
 
 namespace OpcUaExporter;
 

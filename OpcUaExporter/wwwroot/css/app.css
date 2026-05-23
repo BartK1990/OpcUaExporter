@@ -74,8 +74,10 @@ body {
 }
 
 .logo-icon {
-    font-size: 28px;
-    color: var(--amber);
+    width: 80px;
+    height: 80px;
+    object-fit: contain;
+    filter: brightness(0) saturate(100%) invert(66%) sepia(87%) saturate(1157%) hue-rotate(345deg) brightness(98%) contrast(91%);
     line-height: 1;
 }
 
