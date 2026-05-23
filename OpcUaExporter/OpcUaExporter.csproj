@@ -14,10 +14,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Remove="wwwroot\app.ico" />
-  </ItemGroup>
-
-  <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" Version="8.0.*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="8.0.*" />
     <PackageReference Include="CsvHelper" Version="33.*" />
@@ -29,6 +25,11 @@
 
   <ItemGroup>
     <Resource Include="wwwroot\app.ico" />
+
+    <Content Update="wwwroot\app.ico">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
+    </Content>
 
     <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
