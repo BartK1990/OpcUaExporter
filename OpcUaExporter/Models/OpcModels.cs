@@ -11,7 +11,7 @@ public class OpcTag
     public object? Value      { get; set; }
     public string? Quality    { get; set; }
     public bool   IsSelected  { get; set; }
-    public List<OpcTag> Children { get; set; } = new();
+    public List<OpcTag> Children { get; set; } = [];
 
     /// <summary>Flattens this node and all descendant Variable nodes.</summary>
     public IEnumerable<OpcTag> Flatten()
@@ -46,6 +46,8 @@ public class ConnectionProfile
     public AuthenticationType AuthenticationType { get; set; } = AuthenticationType.Anonymous;
     public string Username { get; set; } = string.Empty;
     public string Password { get; set; } = string.Empty;
+    public bool EnableParallelBrowse { get; set; } = true;
+    public int ParallelBrowseMaxDegree { get; set; } = 10;
 }
 
 /// <summary>Export options.</summary>

@@ -87,6 +87,23 @@
                         <input class="field-input" type="password" @bind="Opc.Profile.Password" autocomplete="current-password" />
                     }
                 </section>
+
+                <section class="panel settings-panel">
+                    <h3 class="panel-title">Browse Performance</h3>
+
+                    <label class="field-label">Parallel top-level browse</label>
+                    <input type="checkbox" @bind="Opc.Profile.EnableParallelBrowse" />
+
+                    @if (Opc.Profile.EnableParallelBrowse)
+                    {
+                        <label class="field-label">Max parallel branches</label>
+                        <input class="field-input"
+                               type="number"
+                               min="1"
+                               max="32"
+                               @bind="Opc.Profile.ParallelBrowseMaxDegree" />
+                    }
+                </section>
             </div>
 
             @if (_warnings.Count > 0)

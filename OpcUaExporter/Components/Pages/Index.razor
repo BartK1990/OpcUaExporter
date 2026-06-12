@@ -153,7 +153,7 @@
             {
                 <div class="content-header">
                     <h2>Tag Browser</h2>
-                    <span class="badge">@FlatTagCount variable tags</span>
+                    <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
                 </div>
 
                 <!-- Tag tree -->
@@ -218,7 +218,7 @@
     private string _exportPath   = string.Empty;
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
-    private int FlatTagCount   => FlatAll(Opc.TagTree).Count(t => t.NodeClass == "Variable");
+    private int FlatTagCount   => Opc.BrowsedVariableCount;
 
     protected override void OnInitialized()
     {

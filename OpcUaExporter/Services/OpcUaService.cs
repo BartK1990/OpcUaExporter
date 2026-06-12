@@ -44,6 +44,7 @@ public class OpcUaService
 
     // Browse tree
     public List<OpcTag> TagTree          { get; private set; } = new();
+    public int BrowsedVariableCount { get; private set; }
 
     // Live readings (after Read)
     public List<TagReading> LastReadings  { get; private set; } = new();
@@ -99,12 +100,33 @@ public class OpcUaService
             await RunSafe(async () =>
             {
                 SetStatus("Connecting and browsing tags…");
-                TagTree = await _bridge.BrowseAsync(Profile, linkedCts.Token);
+                BrowsedVariableCount = 0;
+                TagTree = [];
+                Notify();
+
+                TagTree = await _bridge.BrowseAsync(
+                    Profile,
+                    onTopStructureReady: topTags =>
+                    {
+                        TagTree = topTags;
+                        var browseMode = Profile.EnableParallelBrowse
+                            ? $"parallel (max {Math.Clamp(Profile.ParallelBrowseMaxDegree, 1, 32)})"
+                            : "sequential";
+                        SetStatus($"Top structure loaded ({topTags.Count} node(s)). Continuing deep scan ({browseMode})…");
+                    },
+                    onVariableCountChanged: variableCount =>
+                    {
+                        BrowsedVariableCount = variableCount;
+                        SetStatus($"Browsing tags… {BrowsedVariableCount} variable tag(s) found");
+                    },
+                    ct: linkedCts.Token);
+
                 RefreshPendingCertificates();
                 SortTreeByNodeId(TagTree);
                 IsConnected  = true;
                 LastReadings = [];
-                SetStatus($"Browsed {FlatCount(TagTree)} variable tags.");
+                BrowsedVariableCount = FlatCount(TagTree);
+                SetStatus($"Browsed {BrowsedVariableCount} variable tags.");
             }, "Browse canceled.");
         }
         finally
