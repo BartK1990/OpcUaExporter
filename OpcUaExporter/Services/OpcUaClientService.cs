@@ -105,6 +105,89 @@ public class OpcUaClientService
         _diagnostics.Add("Connection test completed successfully.");
     }
 
+    public async Task<(IAsyncDisposable Handle, List<TagReading> InitialReadings)> SubscribeAsync(
+        ConnectionProfile profile,
+        IEnumerable<string> nodeIds,
+        Action<TagReading> onUpdate,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(onUpdate);
+
+        var ids = nodeIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (ids.Count == 0)
+            throw new InvalidOperationException("No tags were selected for subscription.");
+
+        var session = await CreateSessionAsync(profile, ct);
+
+        try
+        {
+            var initialReadings = await ReadCurrentValuesAsync(session, ids, ct);
+
+            var subscription = new Subscription(session.DefaultSubscription)
+            {
+                DisplayName = "OpcUaExporter Live Subscription",
+                PublishingEnabled = true,
+                PublishingInterval = 1000,
+                KeepAliveCount = 10,
+                LifetimeCount = 30,
+                MaxNotificationsPerPublish = 0,
+                Priority = 0
+            };
+
+            foreach (var id in ids)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var monitoredItem = new MonitoredItem(subscription.DefaultItem)
+                {
+                    DisplayName = id,
+                    StartNodeId = NodeId.Parse(id),
+                    AttributeId = Attributes.Value,
+                    SamplingInterval = 1000,
+                    QueueSize = 100,
+                    DiscardOldest = true
+                };
+
+                monitoredItem.Notification += (_, e) =>
+                {
+                    if (e.NotificationValue is not MonitoredItemNotification notification)
+                        return;
+
+                    var value = notification.Value;
+                    var update = new TagReading
+                    {
+                        NodeId = monitoredItem.DisplayName,
+                        DisplayName = monitoredItem.DisplayName,
+                        Value = value.WrappedValue.Value,
+                        Quality = value.StatusCode.ToString(),
+                        Timestamp = value.SourceTimestamp.ToString("o")
+                    };
+
+                    onUpdate(update);
+                };
+
+                subscription.AddItem(monitoredItem);
+            }
+
+            session.AddSubscription(subscription);
+            subscription.Create();
+
+            _diagnostics.Add($"Subscription started. Monitoring {ids.Count} tag(s).");
+
+            var handle = new SessionSubscriptionHandle(session, subscription, _diagnostics);
+            return (handle, initialReadings);
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
+    }
+
     public async Task<ServerCapabilitiesInfo> GetServerCapabilitiesAsync(string endpointUrl, CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(endpointUrl))
@@ -709,6 +792,58 @@ public class OpcUaClientService
     private static int CountVariables(IEnumerable<OpcTag> tags)
         => Flatten(tags).Count(t => string.Equals(t.NodeClass, "Variable", StringComparison.OrdinalIgnoreCase));
 
+    private static async Task<List<TagReading>> ReadCurrentValuesAsync(Session session, IEnumerable<string> nodeIds, CancellationToken ct)
+    {
+        var ids = nodeIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var rows = new List<TagReading>(ids.Count);
+
+        foreach (var id in ids)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var row = new TagReading
+            {
+                NodeId = id,
+                DisplayName = id
+            };
+
+            try
+            {
+                var nodeId = NodeId.Parse(id);
+                var readValueIdCollection = new ReadValueIdCollection
+                {
+                    new ReadValueId
+                    {
+                        NodeId = nodeId,
+                        AttributeId = Attributes.Value
+                    }
+                };
+
+                var readResponse = await session.ReadAsync(null, 0, TimestampsToReturn.Both, readValueIdCollection, ct);
+                var value = readResponse?.Results?[0];
+                row.Value = value?.Value;
+                row.Quality = value?.StatusCode.ToString();
+                row.Timestamp = value?.SourceTimestamp.ToString("o");
+
+                var node = await session.ReadNodeAsync(nodeId, ct);
+                row.DisplayName = node?.DisplayName?.Text ?? id;
+                row.DataType = await TryGetDataTypeName(node, session);
+            }
+            catch (Exception ex)
+            {
+                row.Error = ex.Message;
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
     private static IEnumerable<OpcTag> Flatten(IEnumerable<OpcTag> tags)
     {
         foreach (var tag in tags)
@@ -726,5 +861,44 @@ public class OpcUaClientService
         public Dictionary<string, string?> DataTypeNameCache { get; } = new(StringComparer.Ordinal);
 
         public HashSet<string> VisitedNodeIds { get; } = new(StringComparer.Ordinal);
+    }
+
+    private sealed class SessionSubscriptionHandle : IAsyncDisposable
+    {
+        private readonly Session _session;
+        private readonly Subscription _subscription;
+        private readonly DiagnosticsLogService _diagnostics;
+        private bool _disposed;
+
+        public SessionSubscriptionHandle(Session session, Subscription subscription, DiagnosticsLogService diagnostics)
+        {
+            _session = session;
+            _subscription = subscription;
+            _diagnostics = diagnostics;
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return ValueTask.CompletedTask;
+
+            try
+            {
+                if (_session.Connected)
+                {
+                    _subscription.Delete(true);
+                    _session.RemoveSubscription(_subscription);
+                }
+            }
+            catch
+            {
+                // best effort cleanup
+            }
+
+            _session.Dispose();
+            _disposed = true;
+            _diagnostics.Add("Subscription stopped.");
+            return ValueTask.CompletedTask;
+        }
     }
 }
