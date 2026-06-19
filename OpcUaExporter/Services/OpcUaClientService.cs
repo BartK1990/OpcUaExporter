@@ -16,6 +16,7 @@ namespace OpcUaExporter.Services;
 public class OpcUaClientService
 {
     private const int BrowseProgressLogInterval = 1000;
+    private const int BrowseVariableProgressReportInterval = 100;
 
     private readonly ILogger<OpcUaClientService> _logger;
     private readonly DiagnosticsLogService _diagnostics;
@@ -30,16 +31,80 @@ public class OpcUaClientService
         _configuration = new Lazy<Task<ApplicationConfiguration>>(BuildConfigurationAsync);
     }
 
-    public async Task<List<OpcTag>> BrowseAsync(ConnectionProfile profile, CancellationToken ct = default)
+    public async Task<List<OpcTag>> BrowseAsync(
+        ConnectionProfile profile,
+        Action<List<OpcTag>>? onTopStructureReady = null,
+        Action<int>? onVariableCountChanged = null,
+        CancellationToken ct = default)
     {
         using var session = await CreateSessionAsync(profile, ct);
 
         var rootNodeId = ObjectIds.ObjectsFolder;
         var progress = new BrowseProgressState();
-        progress.VisitedNodeIds.Add(rootNodeId.ToString());
+        progress.TryVisitNode(rootNodeId.ToString());
 
         _diagnostics.Add("Browse started.");
-        var tags = await BrowseNodeRecursiveAsync(session, rootNodeId, progress, ct);
+        var references = await session.FetchReferencesAsync(rootNodeId, ct: ct);
+        var topLevelChildren = references
+            .Where(r => r.IsForward)
+            .Select(r => (Reference: r, NodeId: ExpandedNodeId.ToNodeId(r.NodeId, session.NamespaceUris)))
+            .Where(x => x.NodeId is not null)
+            .Select(x => (x.Reference, NodeId: x.NodeId!))
+            .ToList();
+
+        var variableDataTypes = await ReadVariableDataTypesAsync(session, topLevelChildren, ct);
+
+        var tags = new List<OpcTag>(topLevelChildren.Count);
+        foreach (var (reference, childNodeId) in topLevelChildren)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var tag = new OpcTag
+            {
+                NodeId = childNodeId.ToString(),
+                BrowseName = reference.BrowseName?.ToString() ?? string.Empty,
+                DisplayName = reference.DisplayName?.Text ?? childNodeId.ToString(),
+                NodeClass = reference.NodeClass.ToString()
+            };
+
+            if (reference.NodeClass == NodeClass.Variable &&
+                variableDataTypes.TryGetValue(tag.NodeId, out var dataTypeId) &&
+                dataTypeId is not null)
+            {
+                tag.DataType = await GetDataTypeNameCachedAsync(dataTypeId, session, progress);
+            }
+
+            if (reference.NodeClass == NodeClass.Variable)
+                progress.IncrementVariableCount();
+
+            tags.Add(tag);
+        }
+
+        onTopStructureReady?.Invoke(tags);
+        onVariableCountChanged?.Invoke(progress.VariableCount);
+
+        if (profile.EnableParallelBrowse)
+        {
+            var maxDegree = Math.Clamp(profile.ParallelBrowseMaxDegree, 1, 32);
+            var options = new ParallelOptions
+            {
+                MaxDegreeOfParallelism = maxDegree,
+                CancellationToken = ct
+            };
+
+            await Parallel.ForEachAsync(tags, options, async (tag, token) =>
+            {
+                await BrowseTopLevelTagAsync(session, tag, progress, onVariableCountChanged, token);
+            });
+        }
+        else
+        {
+            foreach (var tag in tags)
+            {
+                ct.ThrowIfCancellationRequested();
+                await BrowseTopLevelTagAsync(session, tag, progress, onVariableCountChanged, ct);
+            }
+        }
 
         _diagnostics.Add($"Browse completed. Scanned {progress.ScannedNodes} node(s). Found {CountVariables(tags)} variable tag(s).");
         return tags;
@@ -103,6 +168,89 @@ public class OpcUaClientService
     {
         using var session = await CreateSessionAsync(profile, ct);
         _diagnostics.Add("Connection test completed successfully.");
+    }
+
+    public async Task<(IAsyncDisposable Handle, List<TagReading> InitialReadings)> SubscribeAsync(
+        ConnectionProfile profile,
+        IEnumerable<string> nodeIds,
+        Action<TagReading> onUpdate,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(onUpdate);
+
+        var ids = nodeIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        if (ids.Count == 0)
+            throw new InvalidOperationException("No tags were selected for subscription.");
+
+        var session = await CreateSessionAsync(profile, ct);
+
+        try
+        {
+            var initialReadings = await ReadCurrentValuesAsync(session, ids, ct);
+
+            var subscription = new Subscription(session.DefaultSubscription)
+            {
+                DisplayName = "OpcUaExporter Live Subscription",
+                PublishingEnabled = true,
+                PublishingInterval = 1000,
+                KeepAliveCount = 10,
+                LifetimeCount = 30,
+                MaxNotificationsPerPublish = 0,
+                Priority = 0
+            };
+
+            foreach (var id in ids)
+            {
+                ct.ThrowIfCancellationRequested();
+
+                var monitoredItem = new MonitoredItem(subscription.DefaultItem)
+                {
+                    DisplayName = id,
+                    StartNodeId = NodeId.Parse(id),
+                    AttributeId = Attributes.Value,
+                    SamplingInterval = 1000,
+                    QueueSize = 100,
+                    DiscardOldest = true
+                };
+
+                monitoredItem.Notification += (_, e) =>
+                {
+                    if (e.NotificationValue is not MonitoredItemNotification notification)
+                        return;
+
+                    var value = notification.Value;
+                    var update = new TagReading
+                    {
+                        NodeId = monitoredItem.DisplayName,
+                        DisplayName = monitoredItem.DisplayName,
+                        Value = value.WrappedValue.Value,
+                        Quality = value.StatusCode.ToString(),
+                        Timestamp = value.SourceTimestamp.ToString("o")
+                    };
+
+                    onUpdate(update);
+                };
+
+                subscription.AddItem(monitoredItem);
+            }
+
+            session.AddSubscription(subscription);
+            await subscription.CreateAsync(ct);
+
+            _diagnostics.Add($"Subscription started. Monitoring {ids.Count} tag(s).");
+
+            var handle = new SessionSubscriptionHandle(session, subscription, _diagnostics);
+            return (handle, initialReadings);
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
     }
 
     public async Task<ServerCapabilitiesInfo> GetServerCapabilitiesAsync(string endpointUrl, CancellationToken ct = default)
@@ -299,8 +447,8 @@ public class OpcUaClientService
 
         var config = await _configuration.Value;
         var discoveryUrl = CoreClientUtils.GetDiscoveryUrl(endpointUrl);
-        using var discoveryClient = await DiscoveryClient.CreateAsync(config, discoveryUrl);
-        var endpointDescriptions = await discoveryClient.GetEndpointsAsync(new StringCollection(), ct);
+        using var discoveryClient = await DiscoveryClient.CreateAsync(config, discoveryUrl, ct: ct);
+        var endpointDescriptions = await discoveryClient.GetEndpointsAsync([], ct);
         if (endpointDescriptions is null || endpointDescriptions.Count == 0)
             throw new InvalidOperationException("No OPC UA endpoints were returned by the server.");
 
@@ -455,7 +603,7 @@ public class OpcUaClientService
 
         await config.ValidateAsync(ApplicationType.Client);
 
-        var appInstance = new ApplicationInstance
+        var appInstance = new ApplicationInstance(config.CreateMessageContext().Telemetry)
         {
             ApplicationName = config.ApplicationName,
             ApplicationType = config.ApplicationType,
@@ -551,7 +699,12 @@ public class OpcUaClientService
         return 0;
     }
 
-    private async Task<List<OpcTag>> BrowseNodeRecursiveAsync(Session session, NodeId nodeId, BrowseProgressState progress, CancellationToken ct)
+    private async Task<List<OpcTag>> BrowseNodeRecursiveAsync(
+        Session session,
+        NodeId nodeId,
+        BrowseProgressState progress,
+        Action<int>? onVariableCountChanged,
+        CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -571,12 +724,12 @@ public class OpcUaClientService
             ct.ThrowIfCancellationRequested();
 
             var childNodeIdText = childNodeId.ToString();
-            var isFirstVisit = progress.VisitedNodeIds.Add(childNodeIdText);
+            var isFirstVisit = progress.TryVisitNode(childNodeIdText);
 
-            progress.ScannedNodes++;
-            if (progress.ScannedNodes % BrowseProgressLogInterval == 0)
+            var scannedNodes = progress.IncrementScannedNodes();
+            if (scannedNodes % BrowseProgressLogInterval == 0)
             {
-                _diagnostics.Add($"Browse in progress: scanned {progress.ScannedNodes} node(s). Latest node: {childNodeId}");
+                _diagnostics.Add($"Browse in progress: scanned {scannedNodes} node(s). Latest node: {childNodeId}");
             }
 
             var tag = new OpcTag
@@ -594,11 +747,18 @@ public class OpcUaClientService
                 tag.DataType = await GetDataTypeNameCachedAsync(dataTypeId, session, progress);
             }
 
+            if (reference.NodeClass == NodeClass.Variable)
+            {
+                var variableCount = progress.IncrementVariableCount();
+                if (variableCount % BrowseVariableProgressReportInterval == 0)
+                    onVariableCountChanged?.Invoke(variableCount);
+            }
+
             if (isFirstVisit && reference.NodeClass is NodeClass.Object or NodeClass.Variable)
             {
                 try
                 {
-                    var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, ct);
+                    var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, onVariableCountChanged, ct);
                     tag.Children = nested;
                 }
                 catch
@@ -611,6 +771,33 @@ public class OpcUaClientService
         }
 
         return children;
+    }
+
+    private async Task BrowseTopLevelTagAsync(
+        Session session,
+        OpcTag tag,
+        BrowseProgressState progress,
+        Action<int>? onVariableCountChanged,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        var childNodeId = NodeId.Parse(tag.NodeId);
+        var isFirstVisit = progress.TryVisitNode(tag.NodeId);
+        if (isFirstVisit && (tag.NodeClass == NodeClass.Object.ToString() || tag.NodeClass == NodeClass.Variable.ToString()))
+        {
+            try
+            {
+                var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, onVariableCountChanged, ct);
+                tag.Children = nested;
+            }
+            catch
+            {
+                tag.Children = [];
+            }
+        }
+
+        onVariableCountChanged?.Invoke(progress.VariableCount);
     }
 
     private static async Task<Dictionary<string, NodeId>> ReadVariableDataTypesAsync(
@@ -670,7 +857,7 @@ public class OpcUaClientService
             return cached;
 
         var resolved = await GetDataTypeName(dataTypeId, session);
-        progress.DataTypeNameCache[key] = resolved;
+        progress.DataTypeNameCache.TryAdd(key, resolved);
         return resolved;
     }
 
@@ -709,6 +896,58 @@ public class OpcUaClientService
     private static int CountVariables(IEnumerable<OpcTag> tags)
         => Flatten(tags).Count(t => string.Equals(t.NodeClass, "Variable", StringComparison.OrdinalIgnoreCase));
 
+    private static async Task<List<TagReading>> ReadCurrentValuesAsync(Session session, IEnumerable<string> nodeIds, CancellationToken ct)
+    {
+        var ids = nodeIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var rows = new List<TagReading>(ids.Count);
+
+        foreach (var id in ids)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var row = new TagReading
+            {
+                NodeId = id,
+                DisplayName = id
+            };
+
+            try
+            {
+                var nodeId = NodeId.Parse(id);
+                var readValueIdCollection = new ReadValueIdCollection
+                {
+                    new ReadValueId
+                    {
+                        NodeId = nodeId,
+                        AttributeId = Attributes.Value
+                    }
+                };
+
+                var readResponse = await session.ReadAsync(null, 0, TimestampsToReturn.Both, readValueIdCollection, ct);
+                var value = readResponse?.Results?[0];
+                row.Value = value?.Value;
+                row.Quality = value?.StatusCode.ToString();
+                row.Timestamp = value?.SourceTimestamp.ToString("o");
+
+                var node = await session.ReadNodeAsync(nodeId, ct);
+                row.DisplayName = node?.DisplayName?.Text ?? id;
+                row.DataType = await TryGetDataTypeName(node, session);
+            }
+            catch (Exception ex)
+            {
+                row.Error = ex.Message;
+            }
+
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
     private static IEnumerable<OpcTag> Flatten(IEnumerable<OpcTag> tags)
     {
         foreach (var tag in tags)
@@ -721,10 +960,61 @@ public class OpcUaClientService
 
     private sealed class BrowseProgressState
     {
-        public int ScannedNodes { get; set; }
+        private int _scannedNodes;
+        private int _variableCount;
 
-        public Dictionary<string, string?> DataTypeNameCache { get; } = new(StringComparer.Ordinal);
+        public int ScannedNodes => Volatile.Read(ref _scannedNodes);
+        public int VariableCount => Volatile.Read(ref _variableCount);
 
-        public HashSet<string> VisitedNodeIds { get; } = new(StringComparer.Ordinal);
+        public ConcurrentDictionary<string, string?> DataTypeNameCache { get; } = new(StringComparer.Ordinal);
+
+        public ConcurrentDictionary<string, byte> VisitedNodeIds { get; } = new(StringComparer.Ordinal);
+
+        public int IncrementScannedNodes()
+            => Interlocked.Increment(ref _scannedNodes);
+
+        public int IncrementVariableCount()
+            => Interlocked.Increment(ref _variableCount);
+
+        public bool TryVisitNode(string nodeId)
+            => VisitedNodeIds.TryAdd(nodeId, 0);
+    }
+
+    private sealed class SessionSubscriptionHandle : IAsyncDisposable
+    {
+        private readonly Session _session;
+        private readonly Subscription _subscription;
+        private readonly DiagnosticsLogService _diagnostics;
+        private bool _disposed;
+
+        public SessionSubscriptionHandle(Session session, Subscription subscription, DiagnosticsLogService diagnostics)
+        {
+            _session = session;
+            _subscription = subscription;
+            _diagnostics = diagnostics;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            if (_disposed)
+                return;
+
+            try
+            {
+                if (_session.Connected)
+                {
+                    await _subscription.DeleteAsync(true);
+                    await _session.RemoveSubscriptionAsync(_subscription);
+                }
+            }
+            catch
+            {
+                // best effort cleanup
+            }
+
+            _session.Dispose();
+            _disposed = true;
+            _diagnostics.Add("Subscription stopped.");
+        }
     }
 }

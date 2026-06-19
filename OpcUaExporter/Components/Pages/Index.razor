@@ -96,6 +96,17 @@
                 <button class="btn btn-secondary" @onclick="ReadSelected" disabled="@Opc.IsBusy">
                     ▶ Read Values
                 </button>
+
+                <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@Opc.IsBusy">
+                    🔔 Subscribe
+                </button>
+
+                @if (Opc.IsSubscribed)
+                {
+                    <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@Opc.IsBusy">
+                        ⏹ Stop Subscription
+                    </button>
+                }
             </section>
 
             <!-- Export -->
@@ -142,7 +153,7 @@
             {
                 <div class="content-header">
                     <h2>Tag Browser</h2>
-                    <span class="badge">@FlatTagCount variable tags</span>
+                    <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
                 </div>
 
                 <!-- Tag tree -->
@@ -207,11 +218,11 @@
     private string _exportPath   = string.Empty;
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
-    private int FlatTagCount   => FlatAll(Opc.TagTree).Count(t => t.NodeClass == "Variable");
+    private int FlatTagCount   => Opc.BrowsedVariableCount;
 
     protected override void OnInitialized()
     {
-        Opc.StateChanged += StateHasChanged;
+        Opc.StateChanged += OnServiceStateChanged;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -247,6 +258,8 @@
         return Task.CompletedTask;
     }
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
+    private async Task SubscribeSelected() => await Opc.SubscribeSelectedAsync();
+    private async Task StopSubscription() => await Opc.StopSubscriptionAsync();
 
     private async Task TrustCertificate(string thumbprint)
         => await Opc.TrustCertificateAsync(thumbprint);
@@ -336,6 +349,11 @@
         Opc.SelectInFolder(tag, false);
     }
 
+    private void OnServiceStateChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
     private static string QualityClass(string? q) =>
         q == null ? "" :
         q.Contains("Good", StringComparison.OrdinalIgnoreCase) ? "quality-good" :
@@ -354,6 +372,6 @@
 
     public void Dispose()
     {
-        Opc.StateChanged -= StateHasChanged;
+        Opc.StateChanged -= OnServiceStateChanged;
     }
 }

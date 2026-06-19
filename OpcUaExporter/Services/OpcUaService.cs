@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging;
 using OpcUaExporter.Models;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Text;
 using System.IO;
 
@@ -15,6 +16,9 @@ public class OpcUaService
     private readonly OpcUaClientService _bridge;
     private readonly ILogger<OpcUaService> _logger;
     private CancellationTokenSource? _browseCancellation;
+    private readonly object _subscriptionSync = new();
+    private IAsyncDisposable? _activeSubscription;
+    private CancellationTokenSource? _subscriptionCts;
 
     public event Action? StateChanged;
 
@@ -40,6 +44,7 @@ public class OpcUaService
 
     // Browse tree
     public List<OpcTag> TagTree          { get; private set; } = new();
+    public int BrowsedVariableCount { get; private set; }
 
     // Live readings (after Read)
     public List<TagReading> LastReadings  { get; private set; } = new();
@@ -48,6 +53,7 @@ public class OpcUaService
     // Status / busy
     public bool   IsBusy       { get; private set; }
     public bool   IsBrowsing   { get; private set; }
+    public bool   IsSubscribed { get; private set; }
     public string StatusMessage { get; private set; } = "Ready";
     public bool   HasError      { get; private set; }
 
@@ -82,6 +88,8 @@ public class OpcUaService
 
     public async Task BrowseAsync(CancellationToken ct = default)
     {
+        await StopSubscriptionAsync();
+
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _browseCancellation = linkedCts;
         IsBrowsing = true;
@@ -92,12 +100,33 @@ public class OpcUaService
             await RunSafe(async () =>
             {
                 SetStatus("Connecting and browsing tags…");
-                TagTree      = await _bridge.BrowseAsync(Profile, linkedCts.Token);
+                BrowsedVariableCount = 0;
+                TagTree = [];
+                Notify();
+
+                TagTree = await _bridge.BrowseAsync(
+                    Profile,
+                    onTopStructureReady: topTags =>
+                    {
+                        TagTree = topTags;
+                        var browseMode = Profile.EnableParallelBrowse
+                            ? $"parallel (max {Math.Clamp(Profile.ParallelBrowseMaxDegree, 1, 32)})"
+                            : "sequential";
+                        SetStatus($"Top structure loaded ({topTags.Count} node(s)). Continuing deep scan ({browseMode})…");
+                    },
+                    onVariableCountChanged: variableCount =>
+                    {
+                        BrowsedVariableCount = variableCount;
+                        SetStatus($"Browsing tags… {BrowsedVariableCount} variable tag(s) found");
+                    },
+                    ct: linkedCts.Token);
+
                 RefreshPendingCertificates();
                 SortTreeByNodeId(TagTree);
                 IsConnected  = true;
-                LastReadings = new();
-                SetStatus($"Browsed {FlatCount(TagTree)} variable tags.");
+                LastReadings = [];
+                BrowsedVariableCount = FlatCount(TagTree);
+                SetStatus($"Browsed {BrowsedVariableCount} variable tags.");
             }, "Browse canceled.");
         }
         finally
@@ -120,6 +149,8 @@ public class OpcUaService
 
     public async Task ReadSelectedAsync(CancellationToken ct = default)
     {
+        await StopSubscriptionAsync();
+
         var selected = GetSelectedNodeIds();
         if (!selected.Any())
         {
@@ -133,6 +164,48 @@ public class OpcUaService
             LastReadings = await _bridge.ReadAsync(Profile, selected, ct);
             RefreshPendingCertificates();
             SetStatus($"Read {LastReadings.Count} tag(s) successfully.");
+        });
+    }
+
+    public async Task SubscribeSelectedAsync(CancellationToken ct = default)
+    {
+        var selected = GetSelectedNodeIds();
+        if (!selected.Any())
+        {
+            SetStatus("No tags selected.", isError: true);
+            return;
+        }
+
+        await RunSafe(async () =>
+        {
+            await StopSubscriptionInternalAsync();
+
+            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            var (handle, initialReadings) = await _bridge.SubscribeAsync(
+                Profile,
+                selected,
+                ApplySubscriptionUpdate,
+                linkedCts.Token);
+
+            lock (_subscriptionSync)
+            {
+                _activeSubscription = handle;
+                _subscriptionCts = linkedCts;
+                IsSubscribed = true;
+            }
+
+            LastReadings = initialReadings;
+            SetStatus($"Subscribed to {selected.Count} tag(s). Listening for updates…");
+        });
+    }
+
+    public async Task StopSubscriptionAsync()
+    {
+        await RunSafe(async () =>
+        {
+            var stopped = await StopSubscriptionInternalAsync();
+            if (stopped)
+                SetStatus("Subscription stopped.");
         });
     }
 
@@ -287,30 +360,25 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus($"Exporting {selected.Count} tag(s)…");
+
             var selectedSet = selected.ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var cachedByNodeId = LastReadings
-                .Where(r => !string.IsNullOrWhiteSpace(r.NodeId))
-                .GroupBy(r => r.NodeId, StringComparer.OrdinalIgnoreCase)
+            var browsedByNodeId = FlattenAll(TagTree)
+                .Where(t => selectedSet.Contains(t.NodeId))
+                .GroupBy(t => t.NodeId, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
-            var missingNodeIds = selected.Where(id => !cachedByNodeId.ContainsKey(id)).ToList();
-            if (missingNodeIds.Count > 0)
-            {
-                SetStatus($"Reading {missingNodeIds.Count} missing tag(s) before export…");
-                var freshReadings = await _bridge.ReadAsync(Profile, missingNodeIds, ct);
-                foreach (var reading in freshReadings)
-                {
-                    if (!string.IsNullOrWhiteSpace(reading.NodeId))
-                        cachedByNodeId[reading.NodeId] = reading;
-                }
-
-                LastReadings = cachedByNodeId.Values.ToList();
-                Notify();
-            }
-
             var rowsToExport = selected
-                .Where(id => cachedByNodeId.ContainsKey(id))
-                .Select(id => cachedByNodeId[id])
+                .Where(id => browsedByNodeId.ContainsKey(id))
+                .Select(id =>
+                {
+                    var tag = browsedByNodeId[id];
+                    return new TagReading
+                    {
+                        DisplayName = tag.DisplayName,
+                        NodeId = tag.NodeId,
+                        DataType = tag.DataType
+                    };
+                })
                 .ToList();
 
             var path = await WriteExportFileAsync(options, rowsToExport, ct);
@@ -414,7 +482,11 @@ public class OpcUaService
         switch (options.Format)
         {
             case ExportFormat.Json:
-                var json = JsonSerializer.Serialize(rows, new JsonSerializerOptions { WriteIndented = true });
+                var json = JsonSerializer.Serialize(rows, new JsonSerializerOptions
+                {
+                    WriteIndented = true,
+                    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+                });
                 await File.WriteAllTextAsync(options.OutputPath, json, ct);
                 break;
 
@@ -431,7 +503,7 @@ public class OpcUaService
     private static string BuildCsv(IEnumerable<TagReading> rows)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Display Name,Node ID,Value,Data Type,Quality,Timestamp");
+        sb.AppendLine("Display Name,Node ID,Data Type");
 
         foreach (var r in rows)
         {
@@ -439,13 +511,7 @@ public class OpcUaService
             sb.Append(',');
             sb.Append(EscapeCsv(r.NodeId));
             sb.Append(',');
-            sb.Append(EscapeCsv(r.Error ?? r.Value?.ToString()));
-            sb.Append(',');
             sb.Append(EscapeCsv(r.DataType));
-            sb.Append(',');
-            sb.Append(EscapeCsv(r.Quality));
-            sb.Append(',');
-            sb.Append(EscapeCsv(r.Timestamp));
             sb.AppendLine();
         }
 
@@ -461,5 +527,55 @@ public class OpcUaService
             return value;
 
         return $"\"{value.Replace("\"", "\"\"")}\"";
+    }
+
+    private void ApplySubscriptionUpdate(TagReading update)
+    {
+        lock (_subscriptionSync)
+        {
+            if (!IsSubscribed)
+                return;
+
+            var existing = LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, update.NodeId, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+            {
+                LastReadings.Add(update);
+            }
+            else
+            {
+                existing.DisplayName = string.IsNullOrWhiteSpace(update.DisplayName) ? existing.DisplayName : update.DisplayName;
+                existing.Value = update.Value;
+                existing.DataType = string.IsNullOrWhiteSpace(update.DataType) ? existing.DataType : update.DataType;
+                existing.Quality = update.Quality;
+                existing.Timestamp = update.Timestamp;
+                existing.Error = update.Error;
+            }
+        }
+
+        Notify();
+    }
+
+    private async Task<bool> StopSubscriptionInternalAsync()
+    {
+        IAsyncDisposable? handle;
+        CancellationTokenSource? cts;
+
+        lock (_subscriptionSync)
+        {
+            handle = _activeSubscription;
+            cts = _subscriptionCts;
+            _activeSubscription = null;
+            _subscriptionCts = null;
+            IsSubscribed = false;
+        }
+
+        cts?.Cancel();
+        cts?.Dispose();
+
+        if (handle is null)
+            return false;
+
+        await handle.DisposeAsync();
+        return true;
     }
 }
