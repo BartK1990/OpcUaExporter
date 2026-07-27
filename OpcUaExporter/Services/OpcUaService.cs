@@ -16,6 +16,7 @@ public class OpcUaService
     private readonly OpcUaClientService _bridge;
     private readonly ILogger<OpcUaService> _logger;
     private CancellationTokenSource? _browseCancellation;
+    private CancellationTokenSource? _scanCancellation;
     private readonly object _subscriptionSync = new();
     private IAsyncDisposable? _activeSubscription;
     private CancellationTokenSource? _subscriptionCts;
@@ -60,6 +61,13 @@ public class OpcUaService
     // Node IDs currently covered by the active subscription
     private HashSet<string> _subscribedNodeIds = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<string> SubscribedNodeIds => _subscribedNodeIds;
+
+    // Server discovery (port scan)
+    public string DiscoveryHost { get; set; } = string.Empty;
+    public bool IsScanningPorts { get; private set; }
+    public int ScanProgressCount { get; private set; }
+    public int ScanTotalCount { get; private set; }
+    public List<DiscoveredServerInfo> DiscoveredServers { get; private set; } = new();
 
     public OpcUaService(OpcUaClientService bridge, ILogger<OpcUaService> logger)
     {
@@ -149,6 +157,80 @@ public class OpcUaService
 
         SetStatus("Canceling browse…");
         _browseCancellation?.Cancel();
+    }
+
+    public Task QuickScanAsync(CancellationToken ct = default)
+        => RunPortScanAsync(OpcUaClientService.WellKnownOpcUaPorts, "common OPC UA ports", ct);
+
+    public Task FullScanAsync(CancellationToken ct = default)
+    {
+        var wellKnown = OpcUaClientService.WellKnownOpcUaPorts;
+        var rest = Enumerable.Range(1, 65535).Where(p => !wellKnown.Contains(p));
+        var ports = wellKnown.Concat(rest).ToList();
+        return RunPortScanAsync(ports, "all 65535 ports", ct);
+    }
+
+    public void CancelScan()
+    {
+        if (!IsScanningPorts)
+            return;
+
+        SetStatus("Canceling scan…");
+        _scanCancellation?.Cancel();
+    }
+
+    private async Task RunPortScanAsync(IReadOnlyList<int> ports, string description, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(DiscoveryHost))
+        {
+            SetStatus("Enter a host/IP to scan.", isError: true);
+            return;
+        }
+
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _scanCancellation = linkedCts;
+        IsScanningPorts = true;
+        DiscoveredServers = [];
+        ScanProgressCount = 0;
+        ScanTotalCount = ports.Count;
+        Notify();
+
+        try
+        {
+            await RunSafe(async () =>
+            {
+                SetStatus($"Scanning {description} on {DiscoveryHost}…");
+
+                await _bridge.ScanForServersAsync(
+                    DiscoveryHost,
+                    ports,
+                    maxDegreeOfParallelism: 100,
+                    tcpProbeTimeoutMs: 250,
+                    onProgress: (scanned, total) =>
+                    {
+                        ScanProgressCount = scanned;
+                        Notify();
+                    },
+                    onServerFound: server =>
+                    {
+                        DiscoveredServers = DiscoveredServers
+                            .Append(server)
+                            .OrderBy(s => s.Port)
+                            .ToList();
+                        Notify();
+                    },
+                    linkedCts.Token);
+
+                SetStatus($"Scan complete. Found {DiscoveredServers.Count} OPC UA server(s) out of {ScanTotalCount} port(s) scanned.");
+            }, "Port scan canceled.");
+        }
+        finally
+        {
+            IsScanningPorts = false;
+            if (ReferenceEquals(_scanCancellation, linkedCts))
+                _scanCancellation = null;
+            Notify();
+        }
     }
 
     public async Task ReadSelectedAsync(CancellationToken ct = default)

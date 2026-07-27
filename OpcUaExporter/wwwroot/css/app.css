@@ -549,6 +549,33 @@ body.pane-resizing * {
 
 .row-error td { color: var(--red); opacity: .8; }
 
+/* ── Server discovery ───────────────────────────────────── */
+.scan-progress-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 10px;
+}
+
+.scan-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: var(--bg-3);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.scan-progress-fill {
+    height: 100%;
+    background: var(--amber-dim);
+    transition: width .2s ease;
+}
+
+.scan-progress-text {
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
 /* ── Diagnostics panel ───────────────────────────────────── */
 .diagnostics-panel {
     border: 1px solid var(--border);

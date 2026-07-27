@@ -5,6 +5,7 @@ using Opc.Ua.Configuration;
 using OpcUaExporter.Models;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Net.Sockets;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 
@@ -17,6 +18,16 @@ public class OpcUaClientService
 {
     private const int BrowseProgressLogInterval = 1000;
     private const int BrowseVariableProgressReportInterval = 100;
+
+    /// <summary>Ports commonly used by OPC UA servers, checked before the rest of the range.</summary>
+    public static readonly IReadOnlyList<int> WellKnownOpcUaPorts =
+    [
+        4840, 4841, 4842, 4843, 4844, 4845, 4850,
+        48010, 48020, 48030,
+        51210, 51211,
+        53530,
+        62541, 62542
+    ];
 
     private readonly ILogger<OpcUaClientService> _logger;
     private readonly DiagnosticsLogService _diagnostics;
@@ -297,6 +308,88 @@ public class OpcUaClientService
             ServerName = serverName,
             SecurityOptions = options
         };
+    }
+
+    /// <summary>
+    /// Scans the given ports on a host for OPC UA servers. Ports are attempted in the order
+    /// supplied by the caller (well-known ports first, then the rest of the range), but
+    /// <paramref name="onServerFound"/> fires whenever a probe completes since probes run concurrently.
+    /// </summary>
+    public async Task ScanForServersAsync(
+        string host,
+        IReadOnlyList<int> ports,
+        int maxDegreeOfParallelism,
+        int tcpProbeTimeoutMs,
+        Action<int, int>? onProgress,
+        Action<DiscoveredServerInfo>? onServerFound,
+        CancellationToken ct = default)
+    {
+        var total = ports.Count;
+        var scanned = 0;
+
+        var options = new ParallelOptions
+        {
+            MaxDegreeOfParallelism = Math.Clamp(maxDegreeOfParallelism, 1, 500),
+            CancellationToken = ct
+        };
+
+        _diagnostics.Add($"Port scan started for {host}: {total} port(s).");
+
+        await Parallel.ForEachAsync(ports, options, async (port, token) =>
+        {
+            var info = await ProbePortAsync(host, port, tcpProbeTimeoutMs, token);
+            if (info is { HandshakeConfirmed: true })
+                onServerFound?.Invoke(info);
+
+            var count = Interlocked.Increment(ref scanned);
+            onProgress?.Invoke(count, total);
+        });
+
+        _diagnostics.Add($"Port scan of {host} completed. Scanned {total} port(s).");
+    }
+
+    private async Task<DiscoveredServerInfo?> ProbePortAsync(string host, int port, int tcpProbeTimeoutMs, CancellationToken ct)
+    {
+        using (var tcp = new TcpClient())
+        {
+            try
+            {
+                using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                connectCts.CancelAfter(tcpProbeTimeoutMs);
+                await tcp.ConnectAsync(host, port, connectCts.Token);
+            }
+            catch
+            {
+                return null;
+            }
+
+            if (!tcp.Connected)
+                return null;
+        }
+
+        var endpointUrl = $"opc.tcp://{host}:{port}";
+        var info = new DiscoveredServerInfo { Port = port, EndpointUrl = endpointUrl };
+
+        try
+        {
+            var config = await _configuration.Value;
+            var discoveryUrl = CoreClientUtils.GetDiscoveryUrl(endpointUrl);
+            using var discoveryCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            discoveryCts.CancelAfter(3000);
+            using var discoveryClient = await DiscoveryClient.CreateAsync(config, discoveryUrl, ct: discoveryCts.Token);
+            var endpoints = await discoveryClient.GetEndpointsAsync([], discoveryCts.Token);
+
+            info.HandshakeConfirmed = endpoints is { Count: > 0 };
+            info.ApplicationName = endpoints?
+                .Select(e => e.Server?.ApplicationName?.Text)
+                .FirstOrDefault(t => !string.IsNullOrWhiteSpace(t));
+        }
+        catch (Exception ex)
+        {
+            info.Error = ex.Message;
+        }
+
+        return info;
     }
 
     public List<PendingCertificateInfo> GetPendingCertificates()
