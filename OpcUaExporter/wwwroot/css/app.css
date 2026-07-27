@@ -248,35 +248,70 @@ body {
     min-height: 0;
 }
 
-.content-split {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-}
-
-.browser-panel,
-.live-panel {
-    min-height: 0;
-}
-
 .browser-panel {
     flex: 1;
+    min-height: 0;
     display: flex;
     flex-direction: column;
 }
 
-.content-split .browser-panel {
-    flex: 0 0 65%;
+.browse-layout {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    gap: 16px;
+    flex: 1;
     min-height: 0;
 }
 
-.content-split .live-panel {
-    flex: 0 0 35%;
+.browse-layout .browser-panel {
+    flex: 0 0 55%;
+    min-width: 200px;
+}
+
+.pane-divider {
+    flex: 0 0 6px;
+    align-self: stretch;
+    position: relative;
+    cursor: col-resize;
+}
+
+.pane-divider::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 2px;
+    width: 1px;
+    background: var(--border);
+}
+
+.pane-divider:hover::after,
+.pane-divider.dragging::after {
+    left: 0;
+    width: 5px;
+    background: var(--amber-dim);
+}
+
+.selected-panel {
+    flex: 1 1 auto;
+    min-width: 200px;
+    min-height: 0;
     display: flex;
     flex-direction: column;
+}
+
+body.pane-resizing,
+body.pane-resizing * {
+    cursor: col-resize !important;
+    user-select: none !important;
+}
+
+.selected-actions { margin-bottom: 10px; }
+
+.selected-table-wrapper {
+    flex: 1;
     min-height: 0;
+    overflow: auto;
 }
 
 .connection-settings-scroll {
@@ -290,12 +325,6 @@ body {
     flex: 1;
     min-height: 0;
     padding-right: 4px;
-}
-
-.live-table-wrapper {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
 }
 
 .content-header {
@@ -439,6 +468,22 @@ body {
 .folder-action-btn:hover {
     color: var(--text-primary);
     border-color: var(--amber-dim);
+}
+
+.subscribed-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 0 rgba(62,207,142,.5);
+    animation: subscribed-pulse 1.8s ease-in-out infinite;
+    flex-shrink: 0;
+}
+
+@keyframes subscribed-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(62,207,142,.5); }
+    70%  { box-shadow: 0 0 0 5px rgba(62,207,142,0); }
+    100% { box-shadow: 0 0 0 0 rgba(62,207,142,0); }
 }
 
 .tag-value {
