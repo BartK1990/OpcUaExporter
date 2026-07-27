@@ -22,6 +22,11 @@
         <span class="tag-icon">@NodeIcon</span>
         <span class="tag-name">@Tag.DisplayName</span>
 
+        @if (IsSubscribed)
+        {
+            <span class="subscribed-dot" title="Subscribed"></span>
+        }
+
         @if (Tag.NodeClass == "Object" && Tag.Children.Any())
         {
             <span class="folder-actions" @onclick:stopPropagation>
@@ -49,7 +54,8 @@
                          @key="child.NodeId"
                          OnToggle="OnToggle"
                          OnSelectAllInFolder="OnSelectAllInFolder"
-                         OnSelectNoneInFolder="OnSelectNoneInFolder" />
+                         OnSelectNoneInFolder="OnSelectNoneInFolder"
+                         SubscribedNodeIds="SubscribedNodeIds" />
             }
 
             @if (HasMoreChildren)
@@ -67,6 +73,9 @@
     [Parameter] public EventCallback<OpcTag> OnToggle { get; set; }
     [Parameter] public EventCallback<OpcTag> OnSelectAllInFolder { get; set; }
     [Parameter] public EventCallback<OpcTag> OnSelectNoneInFolder { get; set; }
+    [Parameter] public IReadOnlySet<string> SubscribedNodeIds { get; set; } = new HashSet<string>();
+
+    private bool IsSubscribed => Tag.NodeClass == "Variable" && SubscribedNodeIds.Contains(Tag.NodeId);
 
     private const int ChildBatchSize = 200;
 

@@ -92,21 +92,6 @@
                     <button class="btn btn-ghost" @onclick="() => Opc.SelectAll(false)">None</button>
                 </div>
                 <p class="selection-count">@SelectedCount tag(s) selected</p>
-
-                <button class="btn btn-secondary" @onclick="ReadSelected" disabled="@Opc.IsBusy">
-                    ▶ Read Values
-                </button>
-
-                <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@Opc.IsBusy">
-                    🔔 Subscribe
-                </button>
-
-                @if (Opc.IsSubscribed)
-                {
-                    <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@Opc.IsBusy">
-                        ⏹ Stop Subscription
-                    </button>
-                }
             </section>
 
             <!-- Export -->
@@ -138,74 +123,118 @@
     </aside>
 
     <!-- ═══════════════════════ MAIN CONTENT ═══════════════════════ -->
-    <main class="content @(Opc.LastReadings.Any() ? "content-split" : "")">
+    <main class="content">
 
-        <section class="browser-panel">
-            @if (!Opc.TagTree.Any() && !Opc.IsBusy)
-            {
-                <div class="empty-state">
-                    <div class="empty-icon">⬡</div>
-                    <h2>No Tags Loaded</h2>
-                    <p>Enter your OPC UA server endpoint and click <strong>Browse Tags</strong>.</p>
-                </div>
-            }
-            else
-            {
-                <div class="content-header">
-                    <h2>Tag Browser</h2>
-                    <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
-                </div>
-
-                <!-- Tag tree -->
-                <div class="tag-tree-container tag-tree-scroll">
-                    @foreach (var tag in Opc.TagTree)
-                    {
-                        <TagNode Tag="tag"
-                                 OnToggle="HandleToggle"
-                                 OnSelectAllInFolder="HandleSelectAllInFolder"
-                                 OnSelectNoneInFolder="HandleSelectNoneInFolder" />
-                    }
-                </div>
-            }
-        </section>
-
-        <!-- Live readings table -->
-        @if (Opc.LastReadings.Any())
+        @if (!Opc.TagTree.Any() && !Opc.IsBusy)
         {
-            <section class="live-panel">
-                <div class="content-header">
-                    <h2>Live Readings</h2>
-                    <span class="badge">@Opc.LastReadings.Count rows</span>
-                </div>
+            <div class="empty-state">
+                <div class="empty-icon">⬡</div>
+                <h2>No Tags Loaded</h2>
+                <p>Enter your OPC UA server endpoint and click <strong>Browse Tags</strong>.</p>
+            </div>
+        }
+        else
+        {
+            <div class="content-header">
+                <h2>Tag Browser</h2>
+                <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
+            </div>
 
-                <div class="table-wrapper live-table-wrapper">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Display Name</th>
-                                <th>Node ID</th>
-                                <th>Value</th>
-                                <th>Data Type</th>
-                                <th>Quality</th>
-                                <th>Timestamp</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var r in Opc.LastReadings)
-                            {
-                                <tr class="@(r.Error != null ? "row-error" : "")">
-                                    <td>@r.DisplayName</td>
-                                    <td class="mono">@r.NodeId</td>
-                                    <td class="mono">@(r.Error ?? r.Value?.ToString() ?? "–")</td>
-                                    <td>@r.DataType</td>
-                                    <td class="@QualityClass(r.Quality)">@r.Quality</td>
-                                    <td class="mono">@r.Timestamp</td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            </section>
+            <div class="browse-layout">
+
+                <!-- Tag tree (left pane) -->
+                <section class="browser-panel">
+                    <div class="tag-tree-container tag-tree-scroll">
+                        @foreach (var tag in Opc.TagTree)
+                        {
+                            <TagNode Tag="tag"
+                                     OnToggle="HandleToggle"
+                                     OnSelectAllInFolder="HandleSelectAllInFolder"
+                                     OnSelectNoneInFolder="HandleSelectNoneInFolder"
+                                     SubscribedNodeIds="Opc.SubscribedNodeIds" />
+                        }
+                    </div>
+                </section>
+
+                <div class="pane-divider" title="Drag to resize"></div>
+
+                <!-- Chosen tags (right pane) -->
+                <section class="selected-panel">
+                    <div class="content-header">
+                        <h2>Selected Tags</h2>
+                        <span class="badge">@SelectedCount tag(s)</span>
+                    </div>
+
+                    <div class="btn-row selected-actions">
+                        <button class="btn btn-secondary" @onclick="ReadSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                            ▶ Read Values
+                        </button>
+
+                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                            🔔 Subscribe
+                        </button>
+                    </div>
+
+                    @if (Opc.IsSubscribed)
+                    {
+                        <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@Opc.IsBusy">
+                            ⏹ Stop Subscription
+                        </button>
+                    }
+
+                    @if (SelectedCount == 0)
+                    {
+                        <div class="empty-state">
+                            <div class="empty-icon">☐</div>
+                            <p>Check tags on the left to add them here.</p>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="table-wrapper selected-table-wrapper">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th></th>
+                                        <th></th>
+                                        <th>Display Name</th>
+                                        <th>Node ID</th>
+                                        <th>Value</th>
+                                        <th>Data Type</th>
+                                        <th>Quality</th>
+                                        <th>Timestamp</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    @foreach (var tag in SelectedTags)
+                                    {
+                                        var reading = FindReading(tag.NodeId);
+                                        var subscribed = Opc.SubscribedNodeIds.Contains(tag.NodeId);
+                                        <tr class="@(reading?.Error != null ? "row-error" : "")">
+                                            <td>
+                                                <button class="btn btn-ghost icon-btn" title="Remove from selection" @onclick="() => Opc.ToggleTag(tag)">✕</button>
+                                            </td>
+                                            <td>
+                                                @if (subscribed)
+                                                {
+                                                    <span class="subscribed-dot" title="Subscribed"></span>
+                                                }
+                                            </td>
+                                            <td>@tag.DisplayName</td>
+                                            <td class="mono">@tag.NodeId</td>
+                                            <td class="mono">@(reading?.Error ?? reading?.Value?.ToString() ?? "–")</td>
+                                            <td>@(reading?.DataType ?? tag.DataType)</td>
+                                            <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
+                                            <td class="mono">@reading?.Timestamp</td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+                    }
+                </section>
+
+            </div>
         }
 
     </main>
@@ -219,6 +248,10 @@
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
+    private List<OpcTag> SelectedTags => Opc.GetSelectedTags();
+
+    private TagReading? FindReading(string nodeId)
+        => Opc.LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, nodeId, StringComparison.OrdinalIgnoreCase));
 
     protected override void OnInitialized()
     {

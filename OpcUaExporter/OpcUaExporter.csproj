@@ -24,12 +24,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Resource Include="wwwroot\app.ico" />
-
-    <Content Update="wwwroot\app.ico">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <CopyToPublishDirectory>Always</CopyToPublishDirectory>
-    </Content>
 
     <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

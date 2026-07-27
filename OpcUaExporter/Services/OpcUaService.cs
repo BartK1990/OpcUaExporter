@@ -57,6 +57,10 @@ public class OpcUaService
     public string StatusMessage { get; private set; } = "Ready";
     public bool   HasError      { get; private set; }
 
+    // Node IDs currently covered by the active subscription
+    private HashSet<string> _subscribedNodeIds = new(StringComparer.OrdinalIgnoreCase);
+    public IReadOnlySet<string> SubscribedNodeIds => _subscribedNodeIds;
+
     public OpcUaService(OpcUaClientService bridge, ILogger<OpcUaService> logger)
     {
         _bridge = bridge;
@@ -194,6 +198,7 @@ public class OpcUaService
                 IsSubscribed = true;
             }
 
+            _subscribedNodeIds = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
             LastReadings = initialReadings;
             SetStatus($"Subscribed to {selected.Count} tag(s). Listening for updates…");
         });
@@ -413,6 +418,11 @@ public class OpcUaService
            .Select(t => t.NodeId)
            .ToList();
 
+    public List<OpcTag> GetSelectedTags()
+        => FlattenAll(TagTree)
+           .Where(t => t.IsSelected)
+           .ToList();
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -568,6 +578,8 @@ public class OpcUaService
             _subscriptionCts = null;
             IsSubscribed = false;
         }
+
+        _subscribedNodeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         cts?.Cancel();
         cts?.Dispose();
