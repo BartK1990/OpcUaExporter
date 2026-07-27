@@ -22,10 +22,10 @@ public class OpcUaClientService
     /// <summary>Ports commonly used by OPC UA servers, checked before the rest of the range.</summary>
     public static readonly IReadOnlyList<int> WellKnownOpcUaPorts =
     [
-        4840, 4841, 4842, 4843, 4844, 4845, 4850,
+        4840, 4841, 4842, 4843, 4844, 4845, 4850, 4860, 4870,
         48010, 48020, 48030,
         51210, 51211,
-        53530,
+        53000, 53530,
         62541, 62542
     ];
 
