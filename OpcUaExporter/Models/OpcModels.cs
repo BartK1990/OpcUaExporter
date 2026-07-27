@@ -80,6 +80,16 @@ public class ServerSecurityOption
     public bool SupportsUsernamePassword { get; set; }
 }
 
+/// <summary>An OPC UA server found while scanning a host's ports.</summary>
+public class DiscoveredServerInfo
+{
+    public int Port { get; set; }
+    public string EndpointUrl { get; set; } = string.Empty;
+    public string? ApplicationName { get; set; }
+    public bool HandshakeConfirmed { get; set; }
+    public string? Error { get; set; }
+}
+
 public enum ConnectionSecurityMode
 {
     None,
