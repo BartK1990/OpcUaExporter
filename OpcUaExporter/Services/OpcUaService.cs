@@ -475,14 +475,14 @@ public class OpcUaService
 
     public void SelectAll(bool select)
     {
-        foreach (var tag in FlattenAll(TagTree))
+        foreach (var tag in FlattenAll(TagTree).Where(t => t.IsSelectable))
             tag.IsSelected = select;
         Notify();
     }
 
     public void SelectInFolder(OpcTag folderTag, bool select)
     {
-        foreach (var tag in FlattenAll(folderTag.Children))
+        foreach (var tag in FlattenAll(folderTag.Children).Where(t => t.IsSelectable))
             tag.IsSelected = select;
 
         Notify();
@@ -496,13 +496,13 @@ public class OpcUaService
 
     public List<string> GetSelectedNodeIds()
         => FlattenAll(TagTree)
-           .Where(t => t.IsSelected)
+           .Where(t => t.IsSelectable && t.IsSelected)
            .Select(t => t.NodeId)
            .ToList();
 
     public List<OpcTag> GetSelectedTags()
         => FlattenAll(TagTree)
-           .Where(t => t.IsSelected)
+           .Where(t => t.IsSelectable && t.IsSelected)
            .ToList();
 
     // -----------------------------------------------------------------------

@@ -11,7 +11,7 @@
             <span class="chevron-spacer"></span>
         }
 
-        @if (Tag.NodeClass == "Variable")
+        @if (Tag.IsSelectable)
         {
             <input type="checkbox" class="tag-check"
                    checked="@Tag.IsSelected"

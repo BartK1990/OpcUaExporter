@@ -13,6 +13,9 @@ public class OpcTag
     public bool   IsSelected  { get; set; }
     public List<OpcTag> Children { get; set; } = [];
 
+    /// <summary>Whether this node can be checked/selected (only Variable nodes carry a value to export).</summary>
+    public bool IsSelectable => NodeClass == "Variable";
+
     /// <summary>Flattens this node and all descendant Variable nodes.</summary>
     public IEnumerable<OpcTag> Flatten()
     {

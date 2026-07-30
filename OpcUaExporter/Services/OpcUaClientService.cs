@@ -230,20 +230,30 @@ public class OpcUaClientService
 
                 monitoredItem.Notification += (_, e) =>
                 {
-                    if (e.NotificationValue is not MonitoredItemNotification notification)
-                        return;
-
-                    var value = notification.Value;
-                    var update = new TagReading
+                    try
                     {
-                        NodeId = monitoredItem.DisplayName,
-                        DisplayName = monitoredItem.DisplayName,
-                        Value = value.WrappedValue.Value,
-                        Quality = value.StatusCode.ToString(),
-                        Timestamp = value.SourceTimestamp.ToString("o")
-                    };
+                        if (e.NotificationValue is not MonitoredItemNotification notification)
+                            return;
 
-                    onUpdate(update);
+                        var value = notification.Value;
+                        var update = new TagReading
+                        {
+                            NodeId = monitoredItem.DisplayName,
+                            DisplayName = monitoredItem.DisplayName,
+                            Value = value.WrappedValue.Value,
+                            Quality = value.StatusCode.ToString(),
+                            Timestamp = value.SourceTimestamp.ToString("o")
+                        };
+
+                        onUpdate(update);
+                    }
+                    catch (Exception ex)
+                    {
+                        // This runs on the OPC UA SDK's internal publish-response thread.
+                        // An unhandled exception here (e.g. while the UI thread is busy
+                        // pumping a modal dialog) would otherwise take down the whole process.
+                        _logger.LogError(ex, "Error handling subscription notification for {NodeId}", monitoredItem.DisplayName);
+                    }
                 };
 
                 subscription.AddItem(monitoredItem);
