@@ -473,6 +473,20 @@ public class OpcUaService
         });
     }
 
+    public async Task<NodeDetails?> GetNodeDetailsAsync(string nodeId, CancellationToken ct = default)
+    {
+        NodeDetails? result = null;
+
+        await RunSafe(async () =>
+        {
+            SetStatus("Reading node properties…");
+            result = await _bridge.GetNodeDetailsAsync(Profile, nodeId, ct);
+            SetStatus($"Loaded properties for '{result.DisplayName}'.");
+        });
+
+        return result;
+    }
+
     public void SelectAll(bool select)
     {
         foreach (var tag in FlattenAll(TagTree).Where(t => t.IsSelectable))

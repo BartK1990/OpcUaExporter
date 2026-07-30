@@ -1,7 +1,8 @@
 @using OpcUaExporter.Models
 
 <div class="tag-node @(Tag.NodeClass == "Object" ? "tag-object" : "tag-variable")">
-    <div class="tag-row" @onclick="Toggle">
+    <div class="tag-row" @onclick="Toggle"
+         @oncontextmenu="@(e => OnContextMenu.InvokeAsync((Tag, e)))" @oncontextmenu:preventDefault>
         @if (Tag.Children.Any())
         {
             <span class="chevron @(_expanded ? "expanded" : "")">▶</span>
@@ -55,6 +56,7 @@
                          OnToggle="OnToggle"
                          OnSelectAllInFolder="OnSelectAllInFolder"
                          OnSelectNoneInFolder="OnSelectNoneInFolder"
+                         OnContextMenu="OnContextMenu"
                          SubscribedNodeIds="SubscribedNodeIds" />
             }
 
@@ -73,6 +75,7 @@
     [Parameter] public EventCallback<OpcTag> OnToggle { get; set; }
     [Parameter] public EventCallback<OpcTag> OnSelectAllInFolder { get; set; }
     [Parameter] public EventCallback<OpcTag> OnSelectNoneInFolder { get; set; }
+    [Parameter] public EventCallback<(OpcTag Tag, MouseEventArgs Args)> OnContextMenu { get; set; }
     [Parameter] public IReadOnlySet<string> SubscribedNodeIds { get; set; } = new HashSet<string>();
 
     private bool IsSubscribed => Tag.NodeClass == "Variable" && SubscribedNodeIds.Contains(Tag.NodeId);

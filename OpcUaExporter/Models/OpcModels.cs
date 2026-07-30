@@ -27,6 +27,35 @@ public class OpcTag
     }
 }
 
+/// <summary>Full attribute + reference details for a single node, shown in the Node Properties panel.</summary>
+public class NodeDetails
+{
+    public string NodeId      { get; set; } = string.Empty;
+    public string BrowseName  { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string NodeClass   { get; set; } = string.Empty;
+    public List<NodeAttributeInfo> Attributes { get; set; } = [];
+    public List<NodeReferenceInfo> References { get; set; } = [];
+}
+
+/// <summary>A single OPC UA attribute (e.g. DataType, AccessLevel) read from a node.</summary>
+public class NodeAttributeInfo
+{
+    public string Name  { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+}
+
+/// <summary>A single reference to/from a node, e.g. HasComponent, Organizes, HasSubtype.</summary>
+public class NodeReferenceInfo
+{
+    public string ReferenceTypeName  { get; set; } = string.Empty;
+    public bool   IsForward          { get; set; }
+    public string TargetNodeId       { get; set; } = string.Empty;
+    public string TargetBrowseName   { get; set; } = string.Empty;
+    public string TargetDisplayName  { get; set; } = string.Empty;
+    public string TargetNodeClass    { get; set; } = string.Empty;
+}
+
 /// <summary>A single tag value reading.</summary>
 public class TagReading
 {
