@@ -175,6 +175,10 @@
                         <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                             🔔 Subscribe
                         </button>
+
+                        <button class="btn btn-ghost" @onclick="() => Opc.SelectAll(false)" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                            ✕ Clear All
+                        </button>
                     </div>
 
                     @if (Opc.IsSubscribed)
