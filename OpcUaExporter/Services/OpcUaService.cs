@@ -64,6 +64,7 @@ public class OpcUaService
 
     // Server discovery (port scan)
     public string DiscoveryHost { get; set; } = string.Empty;
+    public string DiscoveryCustomPorts { get; set; } = string.Empty;
     public bool IsScanningPorts { get; private set; }
     public int ScanProgressCount { get; private set; }
     public int ScanTotalCount { get; private set; }
@@ -168,6 +169,23 @@ public class OpcUaService
         var rest = Enumerable.Range(1, 65535).Where(p => !wellKnown.Contains(p));
         var ports = wellKnown.Concat(rest).ToList();
         return RunPortScanAsync(ports, "all 65535 ports", ct);
+    }
+
+    public Task CustomScanAsync(CancellationToken ct = default)
+    {
+        List<int> ports;
+        try
+        {
+            ports = OpcUaClientService.ParsePortSpec(DiscoveryCustomPorts);
+        }
+        catch (FormatException ex)
+        {
+            SetStatus(ex.Message, isError: true);
+            Notify();
+            return Task.CompletedTask;
+        }
+
+        return RunPortScanAsync(ports, ports.Count == 1 ? $"port {ports[0]}" : $"{ports.Count} custom port(s)", ct);
     }
 
     public void CancelScan()
