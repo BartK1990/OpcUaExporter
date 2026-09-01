@@ -152,6 +152,7 @@
                                      OnToggle="HandleToggle"
                                      OnSelectAllInFolder="HandleSelectAllInFolder"
                                      OnSelectNoneInFolder="HandleSelectNoneInFolder"
+                                     OnContextMenu="HandleContextMenu"
                                      SubscribedNodeIds="Opc.SubscribedNodeIds" />
                         }
                     </div>
@@ -173,6 +174,10 @@
 
                         <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                             🔔 Subscribe
+                        </button>
+
+                        <button class="btn btn-ghost" @onclick="() => Opc.SelectAll(false)" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                            ✕ Clear All
                         </button>
                     </div>
 
@@ -240,6 +245,81 @@
 
     </main>
 </div>
+
+@if (_contextMenuOpen && _contextMenuTag is not null)
+{
+    <div class="context-menu-backdrop" @onclick="CloseContextMenu"
+         @oncontextmenu="CloseContextMenu" @oncontextmenu:preventDefault></div>
+    <div class="context-menu" style="left:@(_contextMenuX)px; top:@(_contextMenuY)px;">
+        <button type="button" class="context-menu-item" @onclick="ShowNodeProperties">🔍 Properties…</button>
+    </div>
+}
+
+@if (_nodeDetailsOpen)
+{
+    <div class="modal-overlay" @onclick="CloseNodeDetails">
+        <div class="modal" @onclick:stopPropagation>
+            <div class="modal-header">
+                <h3>Node Properties@(_nodeDetails is not null ? $" — {_nodeDetails.DisplayName}" : "")</h3>
+                <button type="button" class="btn btn-ghost icon-btn" @onclick="CloseNodeDetails">✕</button>
+            </div>
+            <div class="modal-body">
+                @if (_nodeDetailsLoading)
+                {
+                    <div class="btn-row"><span class="spinner"></span><span>Loading…</span></div>
+                }
+                else if (_nodeDetails is null)
+                {
+                    <p>Could not load node properties.</p>
+                }
+                else
+                {
+                    <h4 class="panel-title">Attributes</h4>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <tbody>
+                                @foreach (var attr in _nodeDetails.Attributes)
+                                {
+                                    <tr>
+                                        <td>@attr.Name</td>
+                                        <td class="mono">@attr.Value</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <h4 class="panel-title" style="margin-top:16px;">References (@_nodeDetails.References.Count)</h4>
+                    <div class="table-wrapper">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Reference Type</th>
+                                    <th>Direction</th>
+                                    <th>Target</th>
+                                    <th>Node Class</th>
+                                    <th>Node Id</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var r in _nodeDetails.References)
+                                {
+                                    <tr>
+                                        <td>@r.ReferenceTypeName</td>
+                                        <td>@(r.IsForward ? "→ forward" : "← inverse")</td>
+                                        <td>@r.TargetDisplayName</td>
+                                        <td>@r.TargetNodeClass</td>
+                                        <td class="mono">@r.TargetNodeId</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+}
 
 @code {
     private static bool _startupProfilePromptShown;
@@ -381,6 +461,52 @@
     private void HandleSelectNoneInFolder(OpcTag tag)
     {
         Opc.SelectInFolder(tag, false);
+    }
+
+    private OpcTag? _contextMenuTag;
+    private double _contextMenuX;
+    private double _contextMenuY;
+    private bool _contextMenuOpen;
+
+    private NodeDetails? _nodeDetails;
+    private bool _nodeDetailsOpen;
+    private bool _nodeDetailsLoading;
+
+    private void HandleContextMenu((OpcTag Tag, MouseEventArgs Args) e)
+    {
+        _contextMenuTag = e.Tag;
+        _contextMenuX = e.Args.ClientX;
+        _contextMenuY = e.Args.ClientY;
+        _contextMenuOpen = true;
+    }
+
+    private void CloseContextMenu()
+    {
+        _contextMenuOpen = false;
+        _contextMenuTag = null;
+    }
+
+    private async Task ShowNodeProperties()
+    {
+        var tag = _contextMenuTag;
+        CloseContextMenu();
+        if (tag is null)
+            return;
+
+        _nodeDetailsOpen = true;
+        _nodeDetailsLoading = true;
+        _nodeDetails = null;
+        StateHasChanged();
+
+        _nodeDetails = await Opc.GetNodeDetailsAsync(tag.NodeId);
+        _nodeDetailsLoading = false;
+        StateHasChanged();
+    }
+
+    private void CloseNodeDetails()
+    {
+        _nodeDetailsOpen = false;
+        _nodeDetails = null;
     }
 
     private void OnServiceStateChanged()

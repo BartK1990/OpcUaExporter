@@ -52,6 +52,14 @@
                     </button>
                 </div>
 
+                <label class="field-label" style="margin-top:10px;">Custom Ports</label>
+                <div class="path-row">
+                    <input class="field-input" @bind="Opc.DiscoveryCustomPorts" placeholder="e.g. 4840,502,5000-5010" disabled="@Opc.IsBusy" />
+                    <button class="btn btn-secondary" @onclick="CustomScan" disabled="@(Opc.IsBusy || string.IsNullOrWhiteSpace(Opc.DiscoveryHost) || string.IsNullOrWhiteSpace(Opc.DiscoveryCustomPorts))">
+                        🎯 Scan Ports
+                    </button>
+                </div>
+
                 @if (Opc.IsScanningPorts)
                 {
                     <button class="btn btn-ghost" style="margin-top:8px;" @onclick="CancelScan">✕ Cancel Scan</button>
@@ -115,6 +123,7 @@
 
     private async Task QuickScan() => await Opc.QuickScanAsync();
     private async Task FullScan() => await Opc.FullScanAsync();
+    private async Task CustomScan() => await Opc.CustomScanAsync();
 
     private Task CancelScan()
     {

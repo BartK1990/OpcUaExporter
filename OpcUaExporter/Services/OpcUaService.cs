@@ -64,6 +64,7 @@ public class OpcUaService
 
     // Server discovery (port scan)
     public string DiscoveryHost { get; set; } = string.Empty;
+    public string DiscoveryCustomPorts { get; set; } = string.Empty;
     public bool IsScanningPorts { get; private set; }
     public int ScanProgressCount { get; private set; }
     public int ScanTotalCount { get; private set; }
@@ -168,6 +169,23 @@ public class OpcUaService
         var rest = Enumerable.Range(1, 65535).Where(p => !wellKnown.Contains(p));
         var ports = wellKnown.Concat(rest).ToList();
         return RunPortScanAsync(ports, "all 65535 ports", ct);
+    }
+
+    public Task CustomScanAsync(CancellationToken ct = default)
+    {
+        List<int> ports;
+        try
+        {
+            ports = OpcUaClientService.ParsePortSpec(DiscoveryCustomPorts);
+        }
+        catch (FormatException ex)
+        {
+            SetStatus(ex.Message, isError: true);
+            Notify();
+            return Task.CompletedTask;
+        }
+
+        return RunPortScanAsync(ports, ports.Count == 1 ? $"port {ports[0]}" : $"{ports.Count} custom port(s)", ct);
     }
 
     public void CancelScan()
@@ -473,16 +491,30 @@ public class OpcUaService
         });
     }
 
+    public async Task<NodeDetails?> GetNodeDetailsAsync(string nodeId, CancellationToken ct = default)
+    {
+        NodeDetails? result = null;
+
+        await RunSafe(async () =>
+        {
+            SetStatus("Reading node properties…");
+            result = await _bridge.GetNodeDetailsAsync(Profile, nodeId, ct);
+            SetStatus($"Loaded properties for '{result.DisplayName}'.");
+        });
+
+        return result;
+    }
+
     public void SelectAll(bool select)
     {
-        foreach (var tag in FlattenAll(TagTree))
+        foreach (var tag in FlattenAll(TagTree).Where(t => t.IsSelectable))
             tag.IsSelected = select;
         Notify();
     }
 
     public void SelectInFolder(OpcTag folderTag, bool select)
     {
-        foreach (var tag in FlattenAll(folderTag.Children))
+        foreach (var tag in FlattenAll(folderTag.Children).Where(t => t.IsSelectable))
             tag.IsSelected = select;
 
         Notify();
@@ -496,13 +528,13 @@ public class OpcUaService
 
     public List<string> GetSelectedNodeIds()
         => FlattenAll(TagTree)
-           .Where(t => t.IsSelected)
+           .Where(t => t.IsSelectable && t.IsSelected)
            .Select(t => t.NodeId)
            .ToList();
 
     public List<OpcTag> GetSelectedTags()
         => FlattenAll(TagTree)
-           .Where(t => t.IsSelected)
+           .Where(t => t.IsSelectable && t.IsSelected)
            .ToList();
 
     // -----------------------------------------------------------------------
