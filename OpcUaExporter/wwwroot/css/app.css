@@ -507,6 +507,35 @@ body.row-resizing * {
 }
 
 /* ── Tag tree ───────────────────────────────────────────── */
+.tag-search-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+}
+
+.tag-search-input {
+    flex: 1;
+    min-width: 140px;
+}
+
+.tag-filter-toggle {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 11px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.tag-filter-toggle input {
+    accent-color: var(--amber);
+    cursor: pointer;
+}
+
 .tag-tree-container {
     display: flex;
     flex-direction: column;

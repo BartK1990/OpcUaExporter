@@ -145,15 +145,43 @@
 
                 <!-- Tag tree (left pane) -->
                 <section class="browser-panel">
-                    <div class="tag-tree-container tag-tree-scroll">
-                        @foreach (var tag in Opc.TagTree)
+                    <div class="tag-search-row">
+                        <input class="field-input tag-search-input" placeholder="🔍 Search by name or node ID…"
+                               @bind="_tagFilter" @bind:event="oninput" />
+                        @if (!string.IsNullOrEmpty(_tagFilter))
                         {
-                            <TagNode Tag="tag"
-                                     OnToggle="HandleToggle"
-                                     OnSelectAllInFolder="HandleSelectAllInFolder"
-                                     OnSelectNoneInFolder="HandleSelectNoneInFolder"
-                                     OnContextMenu="HandleContextMenu"
-                                     SubscribedNodeIds="Opc.SubscribedNodeIds" />
+                            <button class="btn btn-ghost icon-btn" title="Clear search" @onclick="ClearTagFilter">✕</button>
+                        }
+                        <label class="tag-filter-toggle">
+                            <input type="checkbox" @bind="_selectedOnly" />
+                            Selected only
+                        </label>
+                        @if (IsTagFilterActive)
+                        {
+                            <span class="badge">@FilterMatchCount match(es)</span>
+                        }
+                    </div>
+                    <div class="tag-tree-container tag-tree-scroll">
+                        @if (IsTagFilterActive && FilteredTagTree.Count == 0)
+                        {
+                            <div class="empty-state">
+                                <div class="empty-icon">🔍</div>
+                                <p>No tags match your filter.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var tag in FilteredTagTree)
+                            {
+                                <TagNode Tag="tag"
+                                         @key="tag.NodeId"
+                                         OnToggle="HandleToggle"
+                                         OnSelectAllInFolder="HandleSelectAllInFolder"
+                                         OnSelectNoneInFolder="HandleSelectNoneInFolder"
+                                         OnContextMenu="HandleContextMenu"
+                                         SubscribedNodeIds="Opc.SubscribedNodeIds"
+                                         FilterActive="IsTagFilterActive" />
+                            }
                         }
                     </div>
                 </section>
@@ -388,9 +416,98 @@
     private bool _chartJsInitialized;
     private bool _chartDirty;
 
+    private string _tagFilter = string.Empty;
+    private bool _selectedOnly;
+
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
     private List<OpcTag> SelectedTags => Opc.GetSelectedTags();
+
+    private bool IsTagFilterActive => !string.IsNullOrWhiteSpace(_tagFilter) || _selectedOnly;
+
+    private List<OpcTag> FilteredTagTree => IsTagFilterActive
+        ? BuildFilteredTree(Opc.TagTree)
+        : Opc.TagTree;
+
+    private int FilterMatchCount => IsTagFilterActive ? CountMatches(Opc.TagTree) : 0;
+
+    private void ClearTagFilter() => _tagFilter = string.Empty;
+
+    private bool MatchesTagFilter(OpcTag tag)
+    {
+        if (!string.IsNullOrWhiteSpace(_tagFilter) &&
+            !tag.DisplayName.Contains(_tagFilter, StringComparison.OrdinalIgnoreCase) &&
+            !tag.NodeId.Contains(_tagFilter, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (_selectedOnly && !(tag.IsSelectable && tag.IsSelected))
+            return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a pruned copy of the tag tree containing only nodes that match the
+    /// active filter(s) plus their ancestors. Matching leaf/variable nodes reuse the
+    /// original OpcTag reference (so checkbox toggling still mutates the real tree);
+    /// only non-matching ancestor folders are shallow-cloned to hold a filtered child list.
+    /// </summary>
+    private List<OpcTag> BuildFilteredTree(List<OpcTag> tags)
+    {
+        var result = new List<OpcTag>();
+        foreach (var tag in tags)
+        {
+            var filtered = FilterNode(tag);
+            if (filtered is not null)
+                result.Add(filtered);
+        }
+        return result;
+    }
+
+    private OpcTag? FilterNode(OpcTag tag)
+    {
+        if (MatchesTagFilter(tag))
+            return tag;
+
+        if (tag.Children.Count == 0)
+            return null;
+
+        List<OpcTag>? matchedChildren = null;
+        foreach (var child in tag.Children)
+        {
+            var filteredChild = FilterNode(child);
+            if (filteredChild is not null)
+                (matchedChildren ??= new List<OpcTag>()).Add(filteredChild);
+        }
+
+        if (matchedChildren is null)
+            return null;
+
+        return new OpcTag
+        {
+            NodeId      = tag.NodeId,
+            BrowseName  = tag.BrowseName,
+            DisplayName = tag.DisplayName,
+            NodeClass   = tag.NodeClass,
+            DataType    = tag.DataType,
+            Value       = tag.Value,
+            Quality     = tag.Quality,
+            IsSelected  = tag.IsSelected,
+            Children    = matchedChildren
+        };
+    }
+
+    private int CountMatches(IEnumerable<OpcTag> tags)
+    {
+        var count = 0;
+        foreach (var t in tags)
+        {
+            if (MatchesTagFilter(t))
+                count++;
+            count += CountMatches(t.Children);
+        }
+        return count;
+    }
 
     private TagReading? FindReading(string nodeId)
         => Opc.LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, nodeId, StringComparison.OrdinalIgnoreCase));

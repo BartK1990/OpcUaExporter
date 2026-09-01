@@ -5,7 +5,7 @@
          @oncontextmenu="@(e => OnContextMenu.InvokeAsync((Tag, e)))" @oncontextmenu:preventDefault>
         @if (Tag.Children.Any())
         {
-            <span class="chevron @(_expanded ? "expanded" : "")">▶</span>
+            <span class="chevron @(IsExpanded ? "expanded" : "")">▶</span>
         }
         else
         {
@@ -46,7 +46,7 @@
         }
     </div>
 
-    @if (_expanded && Tag.Children.Any())
+    @if (IsExpanded && Tag.Children.Any())
     {
         <div class="tag-children">
             @foreach (var child in VisibleChildren)
@@ -57,7 +57,8 @@
                          OnSelectAllInFolder="OnSelectAllInFolder"
                          OnSelectNoneInFolder="OnSelectNoneInFolder"
                          OnContextMenu="OnContextMenu"
-                         SubscribedNodeIds="SubscribedNodeIds" />
+                         SubscribedNodeIds="SubscribedNodeIds"
+                         FilterActive="FilterActive" />
             }
 
             @if (HasMoreChildren)
@@ -77,8 +78,13 @@
     [Parameter] public EventCallback<OpcTag> OnSelectNoneInFolder { get; set; }
     [Parameter] public EventCallback<(OpcTag Tag, MouseEventArgs Args)> OnContextMenu { get; set; }
     [Parameter] public IReadOnlySet<string> SubscribedNodeIds { get; set; } = new HashSet<string>();
+    [Parameter] public bool FilterActive { get; set; }
 
     private bool IsSubscribed => Tag.NodeClass == "Variable" && SubscribedNodeIds.Contains(Tag.NodeId);
+
+    /// <summary>While a search/selection filter is active, every rendered branch is forced open
+    /// (the tree is already pruned to matches, so there's nothing to hide behind a collapsed folder).</summary>
+    private bool IsExpanded => FilterActive || _expanded;
 
     private const int ChildBatchSize = 200;
 
