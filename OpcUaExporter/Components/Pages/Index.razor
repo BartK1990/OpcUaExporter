@@ -176,10 +176,37 @@
                             🔔 Subscribe
                         </button>
 
+                        <button class="btn btn-secondary" @onclick="TrendSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                            📈 Trend
+                        </button>
+
                         <button class="btn btn-ghost" @onclick="() => Opc.SelectAll(false)" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                             ✕ Clear All
                         </button>
                     </div>
+
+                    <div class="btn-row selected-actions">
+                        @if (!Opc.IsRecording)
+                        {
+                            <button class="btn btn-secondary" @onclick="StartRecording" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                                ⏺ Record to CSV
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-ghost" @onclick="StopRecording" disabled="@Opc.IsBusy">
+                                ⏹ Stop Recording
+                            </button>
+                        }
+                    </div>
+
+                    @if (Opc.IsRecording)
+                    {
+                        <div class="recording-indicator">
+                            <span class="recording-dot"></span>
+                            <span>Recording (@Opc.RecordedRowCount rows) → @Opc.RecordingFilePath</span>
+                        </div>
+                    }
 
                     @if (Opc.IsSubscribed)
                     {
@@ -241,6 +268,33 @@
                 </section>
 
             </div>
+
+            @if (Opc.IsChartVisible)
+            {
+                <div class="row-divider" title="Drag to resize"></div>
+                <section class="chart-panel">
+                    <div class="content-header chart-panel-header">
+                        <h2>Live Trend</h2>
+                        <span class="badge">@Opc.TrendedNodeIds.Count series</span>
+                        <div class="chart-legend">
+                            @{ var trendIndex = 0; }
+                            @foreach (var t in Opc.GetTrendedTagInfos())
+                            {
+                                var color = Palette[trendIndex++ % Palette.Length];
+                                <span class="legend-chip">
+                                    <span class="legend-dot" style="background:@color;"></span>
+                                    @t.DisplayName
+                                    <button type="button" class="legend-remove" title="Remove from chart" @onclick="() => RemoveFromChart(t.NodeId)">✕</button>
+                                </span>
+                            }
+                        </div>
+                        <button class="btn btn-ghost" @onclick="ClearChart">✕ Clear Chart</button>
+                    </div>
+                    <div class="chart-canvas-wrap">
+                        <canvas @ref="_chartCanvasRef" class="chart-canvas"></canvas>
+                    </div>
+                </section>
+            }
         }
 
     </main>
@@ -324,8 +378,15 @@
 @code {
     private static bool _startupProfilePromptShown;
 
+    private static readonly string[] Palette =
+        ["#f0a030", "#60a8f0", "#3ecf8e", "#f06060", "#c060f0", "#f0e060", "#60f0d0", "#f08060"];
+
     private string _exportFormat = "Csv";
     private string _exportPath   = string.Empty;
+
+    private ElementReference _chartCanvasRef;
+    private bool _chartJsInitialized;
+    private bool _chartDirty;
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
@@ -337,31 +398,62 @@
     protected override void OnInitialized()
     {
         Opc.StateChanged += OnServiceStateChanged;
+        Opc.TrendUpdate += OnTrendUpdate;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _startupProfilePromptShown)
-            return;
-
-        _startupProfilePromptShown = true;
-
-        var lastProfilePath = Opc.GetExistingLastProfilePath();
-        if (string.IsNullOrWhiteSpace(lastProfilePath))
-            return;
-
-        try
+        if (firstRender && !_startupProfilePromptShown)
         {
-            var shouldLoad = await JS.InvokeAsync<bool>("showConfirm", $"Load last saved server profile?\n{lastProfilePath}");
-            if (shouldLoad)
+            _startupProfilePromptShown = true;
+
+            var lastProfilePath = Opc.GetExistingLastProfilePath();
+            if (!string.IsNullOrWhiteSpace(lastProfilePath))
             {
-                await Opc.LoadProfileAsync(lastProfilePath);
-                StateHasChanged();
+                try
+                {
+                    var shouldLoad = await JS.InvokeAsync<bool>("showConfirm", $"Load last saved server profile?\n{lastProfilePath}");
+                    if (shouldLoad)
+                    {
+                        await Opc.LoadProfileAsync(lastProfilePath);
+                        StateHasChanged();
+                    }
+                }
+                catch
+                {
+                    // JS interop not available in some preview modes – ignore
+                }
             }
         }
-        catch
+
+        if (Opc.IsChartVisible)
         {
-            // JS interop not available in some preview modes – ignore
+            try
+            {
+                if (!_chartJsInitialized)
+                {
+                    await JS.InvokeVoidAsync("trendChart.init", _chartCanvasRef);
+                    _chartJsInitialized = true;
+                    _chartDirty = true;
+                }
+
+                if (_chartDirty)
+                {
+                    _chartDirty = false;
+                    var series = Opc.GetTrendedTagInfos()
+                        .Select(t => new { nodeId = t.NodeId, label = t.DisplayName })
+                        .ToArray();
+                    await JS.InvokeVoidAsync("trendChart.setSeries", series);
+                }
+            }
+            catch
+            {
+                // JS interop not available in some preview modes – ignore
+            }
+        }
+        else
+        {
+            _chartJsInitialized = false;
         }
     }
 
@@ -374,6 +466,91 @@
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
     private async Task SubscribeSelected() => await Opc.SubscribeSelectedAsync();
     private async Task StopSubscription() => await Opc.StopSubscriptionAsync();
+
+    private async Task TrendSelected()
+    {
+        await Opc.TrendSelectedAsync();
+        _chartDirty = true;
+    }
+
+    private async Task RemoveFromChart(string nodeId)
+    {
+        Opc.RemoveFromTrend(nodeId);
+        try
+        {
+            await JS.InvokeVoidAsync("trendChart.removeSeries", nodeId);
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private void ClearChart() => Opc.ClearTrend();
+
+    private void OnTrendUpdate(TagReading reading)
+    {
+        if (!TryGetNumeric(reading.Value, out var numericValue))
+            return;
+
+        var nodeId = reading.NodeId;
+        var timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("trendChart.addPoint", nodeId, timestampMs, numericValue);
+            }
+            catch
+            {
+                // JS interop not available in some preview modes – ignore
+            }
+        });
+    }
+
+    private static bool TryGetNumeric(object? value, out double result)
+    {
+        switch (value)
+        {
+            case double d: result = d; return true;
+            case float f: result = f; return true;
+            case decimal m: result = (double)m; return true;
+            case bool b: result = b ? 1 : 0; return true;
+            case IConvertible conv:
+                try
+                {
+                    result = conv.ToDouble(System.Globalization.CultureInfo.InvariantCulture);
+                    return true;
+                }
+                catch
+                {
+                    result = 0;
+                    return false;
+                }
+            default:
+                result = 0;
+                return false;
+        }
+    }
+
+    private async Task StartRecording()
+    {
+        try
+        {
+            var path = await JS.InvokeAsync<string>("showSaveDialog", "CSV Files|*.csv");
+            if (string.IsNullOrEmpty(path))
+                return;
+
+            await Opc.StartRecordingAsync(path);
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private async Task StopRecording() => await Opc.StopRecordingAsync();
 
     private async Task TrustCertificate(string thumbprint)
         => await Opc.TrustCertificateAsync(thumbprint);
@@ -533,5 +710,6 @@
     public void Dispose()
     {
         Opc.StateChanged -= OnServiceStateChanged;
+        Opc.TrendUpdate -= OnTrendUpdate;
     }
 }

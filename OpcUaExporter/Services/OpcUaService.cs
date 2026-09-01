@@ -61,6 +61,21 @@ public class OpcUaService
     // Node IDs currently covered by the active subscription
     private HashSet<string> _subscribedNodeIds = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlySet<string> SubscribedNodeIds => _subscribedNodeIds;
+    private Dictionary<string, string> _displayNameByNodeId = new(StringComparer.OrdinalIgnoreCase);
+
+    // CSV recording (appends one row per live subscription update)
+    private StreamWriter? _recordingWriter;
+    public bool   IsRecording       { get; private set; }
+    public string? RecordingFilePath { get; private set; }
+    public int    RecordedRowCount  { get; private set; }
+
+    // Live trend chart (subset of subscribed tags plotted on the chart)
+    private readonly List<string> _trendedNodeIds = new();
+    public IReadOnlyList<string> TrendedNodeIds => _trendedNodeIds;
+    public bool IsChartVisible { get; private set; }
+
+    /// <summary>Fired for each live update of a currently-trended tag, for the chart to consume.</summary>
+    public event Action<TagReading>? TrendUpdate;
 
     // Server discovery (port scan)
     public string DiscoveryHost { get; set; } = string.Empty;
@@ -282,24 +297,7 @@ public class OpcUaService
 
         await RunSafe(async () =>
         {
-            await StopSubscriptionInternalAsync();
-
-            var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            var (handle, initialReadings) = await _bridge.SubscribeAsync(
-                Profile,
-                selected,
-                ApplySubscriptionUpdate,
-                linkedCts.Token);
-
-            lock (_subscriptionSync)
-            {
-                _activeSubscription = handle;
-                _subscriptionCts = linkedCts;
-                IsSubscribed = true;
-            }
-
-            _subscribedNodeIds = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
-            LastReadings = initialReadings;
+            await SubscribeToAsync(selected, ct);
             SetStatus($"Subscribed to {selected.Count} tag(s). Listening for updates…");
         });
     }
@@ -313,6 +311,140 @@ public class OpcUaService
                 SetStatus("Subscription stopped.");
         });
     }
+
+    /// <summary>Records every live update of the currently selected tags to a CSV file, subscribing if necessary.</summary>
+    public async Task StartRecordingAsync(string filePath, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            SetStatus("Please choose a CSV output path.", isError: true);
+            return;
+        }
+
+        var selected = GetSelectedNodeIds();
+        if (!selected.Any())
+        {
+            SetStatus("No tags selected.", isError: true);
+            return;
+        }
+
+        await RunSafe(async () =>
+        {
+            var selectedSet = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+            if (!IsSubscribed || !selectedSet.SetEquals(_subscribedNodeIds))
+                await SubscribeToAsync(selected, ct);
+
+            var writer = new StreamWriter(filePath, append: false, new UTF8Encoding(false)) { AutoFlush = true };
+            writer.WriteLine("Timestamp,NodeId,DisplayName,Value,Quality");
+
+            lock (_subscriptionSync)
+            {
+                _recordingWriter?.Dispose();
+                _recordingWriter = writer;
+                RecordingFilePath = filePath;
+                RecordedRowCount = 0;
+                IsRecording = true;
+            }
+
+            SetStatus($"Recording selected tags to: {filePath}");
+        });
+    }
+
+    public Task StopRecordingAsync()
+    {
+        StreamWriter? writer;
+        lock (_subscriptionSync)
+        {
+            writer = _recordingWriter;
+            _recordingWriter = null;
+            IsRecording = false;
+        }
+
+        writer?.Dispose();
+        SetStatus("Recording stopped.");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Plots the currently selected tags on the live trend chart, subscribing if necessary.</summary>
+    public async Task TrendSelectedAsync(CancellationToken ct = default)
+    {
+        var selected = GetSelectedNodeIds();
+        if (!selected.Any())
+        {
+            SetStatus("No tags selected.", isError: true);
+            return;
+        }
+
+        await RunSafe(async () =>
+        {
+            var selectedSet = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+            if (!IsSubscribed || !selectedSet.SetEquals(_subscribedNodeIds))
+                await SubscribeToAsync(selected, ct);
+
+            foreach (var id in selected)
+            {
+                if (!_trendedNodeIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                    _trendedNodeIds.Add(id);
+            }
+
+            IsChartVisible = true;
+            SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
+        });
+    }
+
+    public void RemoveFromTrend(string nodeId)
+    {
+        _trendedNodeIds.RemoveAll(id => string.Equals(id, nodeId, StringComparison.OrdinalIgnoreCase));
+        if (_trendedNodeIds.Count == 0)
+            IsChartVisible = false;
+        Notify();
+    }
+
+    public void ClearTrend()
+    {
+        _trendedNodeIds.Clear();
+        IsChartVisible = false;
+        Notify();
+    }
+
+    public List<(string NodeId, string DisplayName)> GetTrendedTagInfos()
+        => _trendedNodeIds
+            .Select(id => (NodeId: id, DisplayName: _displayNameByNodeId.TryGetValue(id, out var n) ? n : id))
+            .ToList();
+
+    private async Task SubscribeToAsync(List<string> selected, CancellationToken ct)
+    {
+        await StopActiveSubscriptionHandleAsync();
+
+        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        var (handle, initialReadings) = await _bridge.SubscribeAsync(
+            Profile,
+            selected,
+            ApplySubscriptionUpdate,
+            linkedCts.Token);
+
+        lock (_subscriptionSync)
+        {
+            _activeSubscription = handle;
+            _subscriptionCts = linkedCts;
+            IsSubscribed = true;
+        }
+
+        _displayNameByNodeId = BuildDisplayNameMap();
+        _subscribedNodeIds = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+
+        _trendedNodeIds.RemoveAll(id => !_subscribedNodeIds.Contains(id));
+        if (_trendedNodeIds.Count == 0)
+            IsChartVisible = false;
+
+        LastReadings = initialReadings;
+    }
+
+    private Dictionary<string, string> BuildDisplayNameMap()
+        => FlattenAll(TagTree)
+            .Where(t => t.IsSelectable)
+            .GroupBy(t => t.NodeId, StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().DisplayName, StringComparer.OrdinalIgnoreCase);
 
     public async Task TestConnectionAsync(CancellationToken ct = default)
     {
@@ -674,12 +806,36 @@ public class OpcUaService
                 existing.Timestamp = update.Timestamp;
                 existing.Error = update.Error;
             }
+
+            if (IsRecording)
+                WriteRecordingRow(update);
         }
+
+        if (_trendedNodeIds.Contains(update.NodeId, StringComparer.OrdinalIgnoreCase))
+            TrendUpdate?.Invoke(update);
 
         Notify();
     }
 
-    private async Task<bool> StopSubscriptionInternalAsync()
+    private void WriteRecordingRow(TagReading update)
+    {
+        if (_recordingWriter is null)
+            return;
+
+        var displayName = _displayNameByNodeId.TryGetValue(update.NodeId, out var dn) ? dn : update.DisplayName;
+
+        _recordingWriter.WriteLine(string.Join(',',
+            EscapeCsv(update.Timestamp ?? DateTime.UtcNow.ToString("o")),
+            EscapeCsv(update.NodeId),
+            EscapeCsv(displayName),
+            EscapeCsv(update.Error ?? update.Value?.ToString()),
+            EscapeCsv(update.Quality)));
+
+        RecordedRowCount++;
+    }
+
+    /// <summary>Tears down just the live OPC UA subscription handle, leaving recording/trend state untouched (used when resubscribing to a new tag selection).</summary>
+    private async Task<bool> StopActiveSubscriptionHandleAsync()
     {
         IAsyncDisposable? handle;
         CancellationTokenSource? cts;
@@ -703,5 +859,25 @@ public class OpcUaService
 
         await handle.DisposeAsync();
         return true;
+    }
+
+    /// <summary>Full subscription teardown: stops the live feed and anything that depends on it (recording, trend chart).</summary>
+    private async Task<bool> StopSubscriptionInternalAsync()
+    {
+        var handleStopped = await StopActiveSubscriptionHandleAsync();
+
+        StreamWriter? writer;
+        lock (_subscriptionSync)
+        {
+            writer = _recordingWriter;
+            _recordingWriter = null;
+            IsRecording = false;
+        }
+        writer?.Dispose();
+
+        _trendedNodeIds.Clear();
+        IsChartVisible = false;
+
+        return handleStopped;
     }
 }
