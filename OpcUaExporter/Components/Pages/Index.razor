@@ -211,7 +211,7 @@
                             ▶ Read Values
                         </button>
 
-                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SubscribableCount == 0)" title="Subscribes to the tags checked in the 🔔 column below">
                             🔔 Subscribe
                         </button>
 
@@ -264,7 +264,7 @@
                             <table class="data-table resizable-table">
                                 <colgroup>
                                     <col style="width:36px;" />
-                                    <col style="width:26px;" />
+                                    <col style="width:44px;" />
                                     <col style="width:36px;" />
                                     <col style="width:160px;" />
                                     <col style="width:220px;" />
@@ -277,7 +277,7 @@
                                 <thead>
                                     <tr>
                                         <th class="col-fixed-icon"></th>
-                                        <th class="col-fixed-icon"></th>
+                                        <th class="col-fixed-icon" title="Subscribe">🔔</th>
                                         <th class="col-fixed-icon" title="Add to trend">📈</th>
                                         <th class="resizable-th">
                                             <span class="th-label sortable" @onclick="ToggleSelectedSort" title="Sort by name">Display Name @SelectedSortIndicator</span>
@@ -301,6 +301,9 @@
                                                 <button class="btn btn-ghost icon-btn" title="Remove from selection" @onclick="() => Opc.ToggleTag(tag)">✕</button>
                                             </td>
                                             <td class="col-fixed-icon">
+                                                <input type="checkbox" class="tag-check" title="@(tag.IsSubscribeEnabled ? "Exclude from subscription" : "Include in subscription")"
+                                                       checked="@tag.IsSubscribeEnabled" disabled="@Opc.IsBusy"
+                                                       @onchange="() => ToggleTagSubscribe(tag)" />
                                                 @if (subscribed)
                                                 {
                                                     <span class="subscribed-dot" title="Subscribed"></span>
@@ -531,6 +534,7 @@
     private bool _selectedOnly;
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
+    private int SubscribableCount => Opc.GetSubscribeEnabledNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
     private List<OpcTag> SelectedTags
     {
@@ -746,6 +750,8 @@
         await Opc.TrendSelectedAsync();
         _chartDirty = true;
     }
+
+    private async Task ToggleTagSubscribe(OpcTag tag) => await Opc.ToggleTagSubscribeAsync(tag);
 
     private async Task ToggleTagTrend(string nodeId)
     {

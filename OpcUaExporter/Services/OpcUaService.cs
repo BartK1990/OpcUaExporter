@@ -296,10 +296,50 @@ public class OpcUaService
             return;
         }
 
+        var subscribable = GetSubscribeEnabledNodeIds();
+        if (!subscribable.Any())
+        {
+            SetStatus("No selected tags are enabled for subscription. Check the 🔔 box next to a tag to include it.", isError: true);
+            return;
+        }
+
         await RunSafe(async () =>
         {
-            await SubscribeToAsync(selected, ct);
-            SetStatus($"Subscribed to {selected.Count} tag(s). Listening for updates…");
+            await SubscribeToAsync(subscribable, ct);
+            SetStatus($"Subscribed to {subscribable.Count} tag(s). Listening for updates…");
+        });
+    }
+
+    /// <summary>Toggles whether a tag is included in the subscription. If a subscription is already active, it is immediately resubscribed to reflect the change.</summary>
+    public async Task ToggleTagSubscribeAsync(OpcTag tag, CancellationToken ct = default)
+    {
+        if (!tag.IsSelectable)
+            return;
+
+        tag.IsSubscribeEnabled = !tag.IsSubscribeEnabled;
+
+        if (!IsSubscribed)
+        {
+            Notify();
+            return;
+        }
+
+        await RunSafe(async () =>
+        {
+            var desired = GetSubscribeEnabledNodeIds();
+            if (desired.Count == 0)
+            {
+                await StopActiveSubscriptionHandleAsync();
+                SetStatus("Subscription stopped (no tags enabled for subscription).");
+                return;
+            }
+
+            var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
+            if (!desiredSet.SetEquals(_subscribedNodeIds))
+            {
+                await SubscribeToAsync(desired, ct);
+                SetStatus($"Subscribed to {desired.Count} tag(s). Listening for updates…");
+            }
         });
     }
 
@@ -739,6 +779,13 @@ public class OpcUaService
     public List<OpcTag> GetSelectedTags()
         => FlattenAll(TagTree)
            .Where(t => t.IsSelectable && t.IsSelected)
+           .ToList();
+
+    /// <summary>Node IDs of selected tags that are also marked for subscription (see <see cref="OpcTag.IsSubscribeEnabled"/>).</summary>
+    public List<string> GetSubscribeEnabledNodeIds()
+        => FlattenAll(TagTree)
+           .Where(t => t.IsSelectable && t.IsSelected && t.IsSubscribeEnabled)
+           .Select(t => t.NodeId)
            .ToList();
 
     // -----------------------------------------------------------------------
