@@ -3,12 +3,21 @@
 @using OpcUaExporter.Services
 @inject OpcUaService Opc
 @inject IJSRuntime JS
+@inject DiagnosticsLogService Diagnostics
 @implements IDisposable
 
 <div class="app-shell">
 
     <!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
-    <aside class="sidebar">
+    <aside class="sidebar @(_sidebarCollapsed ? "sidebar-collapsed" : "")">
+        <button type="button" class="sidebar-toggle"
+                title="@(_sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")"
+                @onclick="() => _sidebarCollapsed = !_sidebarCollapsed">
+            @(_sidebarCollapsed ? "»" : "«")
+        </button>
+
+        @if (!_sidebarCollapsed)
+        {
         <div class="sidebar-header">
             <div class="logo">
                 <img class="logo-icon" src="app.ico" />
@@ -122,6 +131,7 @@
         <div class="status-bar @(Opc.HasError ? "status-error" : "status-ok")">
             @Opc.StatusMessage
         </div>
+        }
     </aside>
 
     <!-- ═══════════════════════ MAIN CONTENT ═══════════════════════ -->
@@ -146,15 +156,43 @@
 
                 <!-- Tag tree (left pane) -->
                 <section class="browser-panel">
-                    <div class="tag-tree-container tag-tree-scroll">
-                        @foreach (var tag in Opc.TagTree)
+                    <div class="tag-search-row">
+                        <input class="field-input tag-search-input" placeholder="🔍 Search by name or node ID…"
+                               @bind="_tagFilter" @bind:event="oninput" />
+                        @if (!string.IsNullOrEmpty(_tagFilter))
                         {
-                            <TagNode Tag="tag"
-                                     OnToggle="HandleToggle"
-                                     OnSelectAllInFolder="HandleSelectAllInFolder"
-                                     OnSelectNoneInFolder="HandleSelectNoneInFolder"
-                                     OnContextMenu="HandleContextMenu"
-                                     SubscribedNodeIds="Opc.SubscribedNodeIds" />
+                            <button class="btn btn-ghost icon-btn" title="Clear search" @onclick="ClearTagFilter">✕</button>
+                        }
+                        <label class="tag-filter-toggle">
+                            <input type="checkbox" @bind="_selectedOnly" />
+                            Selected only
+                        </label>
+                        @if (IsTagFilterActive)
+                        {
+                            <span class="badge">@FilterMatchCount match(es)</span>
+                        }
+                    </div>
+                    <div class="tag-tree-container tag-tree-scroll">
+                        @if (IsTagFilterActive && FilteredTagTree.Count == 0)
+                        {
+                            <div class="empty-state">
+                                <div class="empty-icon">🔍</div>
+                                <p>No tags match your filter.</p>
+                            </div>
+                        }
+                        else
+                        {
+                            @foreach (var tag in FilteredTagTree)
+                            {
+                                <TagNode Tag="tag"
+                                         @key="tag.NodeId"
+                                         OnToggle="HandleToggle"
+                                         OnSelectAllInFolder="HandleSelectAllInFolder"
+                                         OnSelectNoneInFolder="HandleSelectNoneInFolder"
+                                         OnContextMenu="HandleContextMenu"
+                                         SubscribedNodeIds="Opc.SubscribedNodeIds"
+                                         FilterActive="IsTagFilterActive" />
+                            }
                         }
                     </div>
                 </section>
@@ -177,17 +215,41 @@
                             🔔 Subscribe
                         </button>
 
+                        <button class="btn btn-secondary" @onclick="TrendSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                            📈 Trend All
+                        </button>
+
                         <button class="btn btn-ghost" @onclick="() => Opc.SelectAll(false)" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                             ✕ Clear All
                         </button>
                     </div>
 
-                    @if (Opc.IsSubscribed)
+                    <div class="btn-row selected-actions">
+                        @if (!Opc.IsRecording)
+                        {
+                            <button class="btn btn-secondary" @onclick="StartRecording" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                                ⏺ Record to CSV
+                            </button>
+                        }
+                        else
+                        {
+                            <button class="btn btn-ghost" @onclick="StopRecording" disabled="@Opc.IsBusy">
+                                ⏹ Stop Recording
+                            </button>
+                        }
+                    </div>
+
+                    @if (Opc.IsRecording)
                     {
-                        <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@Opc.IsBusy">
-                            ⏹ Stop Subscription
-                        </button>
+                        <div class="recording-indicator">
+                            <span class="recording-dot"></span>
+                            <span>Recording (@Opc.RecordedRowCount rows) → @Opc.RecordingFilePath</span>
+                        </div>
                     }
+
+                    <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@(Opc.IsBusy || !Opc.IsSubscribed)">
+                        ⏹ Stop Subscription
+                    </button>
 
                     @if (SelectedCount == 0)
                     {
@@ -199,17 +261,34 @@
                     else
                     {
                         <div class="table-wrapper selected-table-wrapper">
-                            <table class="data-table">
+                            <table class="data-table resizable-table">
+                                <colgroup>
+                                    <col style="width:36px;" />
+                                    <col style="width:26px;" />
+                                    <col style="width:36px;" />
+                                    <col style="width:160px;" />
+                                    <col style="width:220px;" />
+                                    <col style="width:110px;" />
+                                    <col style="width:110px;" />
+                                    <col style="width:90px;" />
+                                    <col style="width:170px;" />
+                                    <col style="width:150px;" />
+                                </colgroup>
                                 <thead>
                                     <tr>
-                                        <th></th>
-                                        <th></th>
-                                        <th>Display Name</th>
-                                        <th>Node ID</th>
-                                        <th>Value</th>
-                                        <th>Data Type</th>
-                                        <th>Quality</th>
-                                        <th>Timestamp</th>
+                                        <th class="col-fixed-icon"></th>
+                                        <th class="col-fixed-icon"></th>
+                                        <th class="col-fixed-icon" title="Add to trend">📈</th>
+                                        <th class="resizable-th">
+                                            <span class="th-label sortable" @onclick="ToggleSelectedSort" title="Sort by name">Display Name @SelectedSortIndicator</span>
+                                            <span class="col-resize-handle"></span>
+                                        </th>
+                                        <th class="resizable-th"><span class="th-label">Node ID</span><span class="col-resize-handle"></span></th>
+                                        <th class="resizable-th"><span class="th-label">Value</span><span class="col-resize-handle"></span></th>
+                                        <th class="resizable-th"><span class="th-label">Data Type</span><span class="col-resize-handle"></span></th>
+                                        <th class="resizable-th"><span class="th-label">Quality</span><span class="col-resize-handle"></span></th>
+                                        <th class="resizable-th"><span class="th-label">Timestamp</span><span class="col-resize-handle"></span></th>
+                                        <th class="resizable-th"><span class="th-label">Write</span><span class="col-resize-handle"></span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -218,14 +297,20 @@
                                         var reading = FindReading(tag.NodeId);
                                         var subscribed = Opc.SubscribedNodeIds.Contains(tag.NodeId);
                                         <tr class="@(reading?.Error != null ? "row-error" : "")">
-                                            <td>
+                                            <td class="col-fixed-icon">
                                                 <button class="btn btn-ghost icon-btn" title="Remove from selection" @onclick="() => Opc.ToggleTag(tag)">✕</button>
                                             </td>
-                                            <td>
+                                            <td class="col-fixed-icon">
                                                 @if (subscribed)
                                                 {
                                                     <span class="subscribed-dot" title="Subscribed"></span>
                                                 }
+                                            </td>
+                                            <td class="col-fixed-icon">
+                                                @{ var trending = Opc.TrendedNodeIds.Contains(tag.NodeId, StringComparer.OrdinalIgnoreCase); }
+                                                <input type="checkbox" class="tag-check" title="@(trending ? "Remove from trend" : "Add to trend")"
+                                                       checked="@trending" disabled="@Opc.IsBusy"
+                                                       @onchange="() => ToggleTagTrend(tag.NodeId)" />
                                             </td>
                                             <td>@tag.DisplayName</td>
                                             <td class="mono">@tag.NodeId</td>
@@ -233,6 +318,16 @@
                                             <td>@(reading?.DataType ?? tag.DataType)</td>
                                             <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
                                             <td class="mono">@reading?.Timestamp</td>
+                                            <td>
+                                                <div class="inline-write">
+                                                    <input class="mono write-input" placeholder="value"
+                                                           value="@GetWriteInput(tag.NodeId)"
+                                                           @onchange="e => _writeInputByNodeId[tag.NodeId] = e.Value?.ToString() ?? string.Empty" />
+                                                    <button class="btn btn-ghost icon-btn" title="Write value"
+                                                            disabled="@(Opc.IsBusy || string.IsNullOrWhiteSpace(GetWriteInput(tag.NodeId)))"
+                                                            @onclick="() => WriteInlineValue(tag.NodeId)">✎</button>
+                                                </div>
+                                            </td>
                                         </tr>
                                     }
                                 </tbody>
@@ -242,6 +337,61 @@
                 </section>
 
             </div>
+
+            @if (Opc.IsChartVisible)
+            {
+                <div class="row-divider" title="Drag to resize"></div>
+                <section class="chart-panel">
+                    <div class="content-header chart-panel-header">
+                        <h2>Live Trend</h2>
+                        <span class="badge">@Opc.TrendedNodeIds.Count series</span>
+                        <label class="trend-window-control">
+                            Window
+                            <input type="number" class="trend-window-input" min="5" max="3600" step="5"
+                                   value="@_trendWindowSeconds" @onchange="OnTrendWindowChanged" />
+                            s
+                        </label>
+                        <button class="btn btn-ghost" @onclick="ClearChart">✕ Clear Chart</button>
+                    </div>
+                    <div class="chart-body">
+                        <div class="chart-canvas-wrap">
+                            <canvas @ref="_chartCanvasRef" class="chart-canvas"></canvas>
+                        </div>
+                        <div class="chart-legend-panel @(_legendCollapsed ? "collapsed" : "")">
+                            <button type="button" class="legend-collapse-toggle"
+                                    title="@(_legendCollapsed ? "Show tag list" : "Hide tag list")"
+                                    @onclick="() => _legendCollapsed = !_legendCollapsed">
+                                @(_legendCollapsed ? "☰" : "›")
+                            </button>
+                            @if (!_legendCollapsed)
+                            {
+                                <div class="chart-legend-list">
+                                    @{ var trendIndex = 0; }
+                                    @foreach (var t in Opc.GetTrendedTagInfos())
+                                    {
+                                        var color = Palette[trendIndex++ % Palette.Length];
+                                        var isNonNumeric = _nonNumericTrendTags.Contains(t.NodeId);
+                                        <div class="legend-row">
+                                            <span class="legend-dot" style="background:@color;"></span>
+                                            <span class="legend-name" title="@t.NodeId">@t.DisplayName</span>
+                                            @if (isNonNumeric)
+                                            {
+                                                <span class="legend-note" title="This tag's value isn't numeric, so it can't be plotted.">n/a</span>
+                                            }
+                                            <button type="button" class="axis-toggle"
+                                                    title="Plot on the @(t.Axis == "right" ? "left" : "right") axis"
+                                                    @onclick="() => ToggleTrendAxis(t.NodeId)">
+                                                @(t.Axis == "right" ? "R" : "L")
+                                            </button>
+                                            <button type="button" class="legend-remove" title="Remove from chart" @onclick="() => RemoveFromChart(t.NodeId)">✕</button>
+                                        </div>
+                                    }
+                                </div>
+                            }
+                        </div>
+                    </div>
+                </section>
+            }
         }
 
     </main>
@@ -252,6 +402,10 @@
     <div class="context-menu-backdrop" @onclick="CloseContextMenu"
          @oncontextmenu="CloseContextMenu" @oncontextmenu:preventDefault></div>
     <div class="context-menu" style="left:@(_contextMenuX)px; top:@(_contextMenuY)px;">
+        @if (_contextMenuTag.IsSelectable)
+        {
+            <button type="button" class="context-menu-item" @onclick="ShowWriteDialog">✏️ Write value…</button>
+        }
         <button type="button" class="context-menu-item" @onclick="ShowNodeProperties">🔍 Properties…</button>
     </div>
 }
@@ -322,15 +476,182 @@
     </div>
 }
 
+@if (_writeDialogOpen)
+{
+    <div class="modal-overlay" @onclick="CloseWriteDialog">
+        <div class="modal write-modal" @onclick:stopPropagation>
+            <div class="modal-header">
+                <h3>Write Value@(_writeDialogDisplayName is not null ? $" — {_writeDialogDisplayName}" : "")</h3>
+                <button type="button" class="btn btn-ghost icon-btn" @onclick="CloseWriteDialog">✕</button>
+            </div>
+            <div class="modal-body">
+                <p class="mono write-dialog-nodeid">@_writeDialogNodeId</p>
+
+                <div class="field-label">Data Type</div>
+                <p class="mono">@(_writeDialogDataType ?? "unknown")</p>
+
+                <div class="field-label">Value</div>
+                <input class="field-input" @bind="_writeDialogValue" @bind:event="oninput"
+                       @onkeydown="OnWriteDialogKeyDown" disabled="@Opc.IsBusy" />
+
+                @if (_writeDialogError is not null)
+                {
+                    <p class="status-error" style="margin-top:8px;">@_writeDialogError</p>
+                }
+
+                <div class="btn-row" style="margin-top:16px;">
+                    <button class="btn btn-secondary" @onclick="SubmitWriteDialog"
+                            disabled="@(Opc.IsBusy || string.IsNullOrWhiteSpace(_writeDialogValue))">
+                        ✎ Write
+                    </button>
+                    <button class="btn btn-ghost" @onclick="CloseWriteDialog">Cancel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
 @code {
     private static bool _startupProfilePromptShown;
+
+    private static readonly string[] Palette =
+        ["#f0a030", "#60a8f0", "#3ecf8e", "#f06060", "#c060f0", "#f0e060", "#60f0d0", "#f08060"];
 
     private string _exportFormat = "Csv";
     private string _exportPath   = string.Empty;
 
+    private ElementReference _chartCanvasRef;
+    private bool _chartJsInitialized;
+    private bool _chartDirty;
+    private bool _legendCollapsed;
+    private bool _sidebarCollapsed;
+    private int _trendWindowSeconds = 60;
+
+    private string _tagFilter = string.Empty;
+    private bool _selectedOnly;
+
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
-    private List<OpcTag> SelectedTags => Opc.GetSelectedTags();
+    private List<OpcTag> SelectedTags
+    {
+        get
+        {
+            var tags = Opc.GetSelectedTags().AsEnumerable();
+            tags = _selectedSort switch
+            {
+                SortDirection.Ascending  => tags.OrderBy(t => t.DisplayName, StringComparer.OrdinalIgnoreCase),
+                SortDirection.Descending => tags.OrderByDescending(t => t.DisplayName, StringComparer.OrdinalIgnoreCase),
+                _ => tags
+            };
+            return tags.ToList();
+        }
+    }
+
+    private enum SortDirection { None, Ascending, Descending }
+    private SortDirection _selectedSort = SortDirection.None;
+
+    private string SelectedSortIndicator => _selectedSort switch
+    {
+        SortDirection.Ascending  => "▲",
+        SortDirection.Descending => "▼",
+        _ => ""
+    };
+
+    private void ToggleSelectedSort()
+    {
+        _selectedSort = _selectedSort switch
+        {
+            SortDirection.None       => SortDirection.Ascending,
+            SortDirection.Ascending  => SortDirection.Descending,
+            _                        => SortDirection.None
+        };
+    }
+
+    private bool IsTagFilterActive => !string.IsNullOrWhiteSpace(_tagFilter) || _selectedOnly;
+
+    private List<OpcTag> FilteredTagTree => IsTagFilterActive
+        ? BuildFilteredTree(Opc.TagTree)
+        : Opc.TagTree;
+
+    private int FilterMatchCount => IsTagFilterActive ? CountMatches(Opc.TagTree) : 0;
+
+    private void ClearTagFilter() => _tagFilter = string.Empty;
+
+    private bool MatchesTagFilter(OpcTag tag)
+    {
+        if (!string.IsNullOrWhiteSpace(_tagFilter) &&
+            !tag.DisplayName.Contains(_tagFilter, StringComparison.OrdinalIgnoreCase) &&
+            !tag.NodeId.Contains(_tagFilter, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        if (_selectedOnly && !(tag.IsSelectable && tag.IsSelected))
+            return false;
+
+        return true;
+    }
+
+    /// <summary>
+    /// Builds a pruned copy of the tag tree containing only nodes that match the
+    /// active filter(s) plus their ancestors. Matching leaf/variable nodes reuse the
+    /// original OpcTag reference (so checkbox toggling still mutates the real tree);
+    /// only non-matching ancestor folders are shallow-cloned to hold a filtered child list.
+    /// </summary>
+    private List<OpcTag> BuildFilteredTree(List<OpcTag> tags)
+    {
+        var result = new List<OpcTag>();
+        foreach (var tag in tags)
+        {
+            var filtered = FilterNode(tag);
+            if (filtered is not null)
+                result.Add(filtered);
+        }
+        return result;
+    }
+
+    private OpcTag? FilterNode(OpcTag tag)
+    {
+        if (MatchesTagFilter(tag))
+            return tag;
+
+        if (tag.Children.Count == 0)
+            return null;
+
+        List<OpcTag>? matchedChildren = null;
+        foreach (var child in tag.Children)
+        {
+            var filteredChild = FilterNode(child);
+            if (filteredChild is not null)
+                (matchedChildren ??= new List<OpcTag>()).Add(filteredChild);
+        }
+
+        if (matchedChildren is null)
+            return null;
+
+        return new OpcTag
+        {
+            NodeId      = tag.NodeId,
+            BrowseName  = tag.BrowseName,
+            DisplayName = tag.DisplayName,
+            NodeClass   = tag.NodeClass,
+            DataType    = tag.DataType,
+            Value       = tag.Value,
+            Quality     = tag.Quality,
+            IsSelected  = tag.IsSelected,
+            Children    = matchedChildren
+        };
+    }
+
+    private int CountMatches(IEnumerable<OpcTag> tags)
+    {
+        var count = 0;
+        foreach (var t in tags)
+        {
+            if (MatchesTagFilter(t))
+                count++;
+            count += CountMatches(t.Children);
+        }
+        return count;
+    }
 
     private TagReading? FindReading(string nodeId)
         => Opc.LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, nodeId, StringComparison.OrdinalIgnoreCase));
@@ -338,31 +659,75 @@
     protected override void OnInitialized()
     {
         Opc.StateChanged += OnServiceStateChanged;
+        Opc.TrendUpdate += OnTrendUpdate;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!firstRender || _startupProfilePromptShown)
-            return;
-
-        _startupProfilePromptShown = true;
-
-        var lastProfilePath = Opc.GetExistingLastProfilePath();
-        if (string.IsNullOrWhiteSpace(lastProfilePath))
-            return;
-
-        try
+        if (firstRender && !_startupProfilePromptShown)
         {
-            var shouldLoad = await JS.InvokeAsync<bool>("showConfirm", $"Load last saved server profile?\n{lastProfilePath}");
-            if (shouldLoad)
+            _startupProfilePromptShown = true;
+
+            var lastProfilePath = Opc.GetExistingLastProfilePath();
+            if (!string.IsNullOrWhiteSpace(lastProfilePath))
             {
-                await Opc.LoadProfileAsync(lastProfilePath);
-                StateHasChanged();
+                try
+                {
+                    var shouldLoad = await JS.InvokeAsync<bool>("showConfirm", $"Load last saved server profile?\n{lastProfilePath}");
+                    if (shouldLoad)
+                    {
+                        await Opc.LoadProfileAsync(lastProfilePath);
+                        StateHasChanged();
+                    }
+                }
+                catch
+                {
+                    // JS interop not available in some preview modes – ignore
+                }
             }
         }
-        catch
+
+        if (Opc.IsChartVisible)
         {
-            // JS interop not available in some preview modes – ignore
+            if (!_chartJsInitialized)
+            {
+                try
+                {
+                    await JS.InvokeVoidAsync("trendChart.init", _chartCanvasRef);
+                    _chartJsInitialized = true;
+                    _chartDirty = true;
+                    await JS.InvokeVoidAsync("trendChart.setWindow", _trendWindowSeconds * 1000);
+                }
+                catch (Exception ex)
+                {
+                    Diagnostics.Add($"Trend chart failed to initialize: {ex.Message}");
+                }
+            }
+
+            if (_chartDirty)
+            {
+                _chartDirty = false;
+                try
+                {
+                    var series = Opc.GetTrendedTagInfos()
+                        .Select(t => new { nodeId = t.NodeId, label = t.DisplayName, axis = t.Axis })
+                        .ToArray();
+                    // Cast to object: InvokeVoidAsync takes `params object?[] args`, and an array of a
+                    // reference type is array-covariant with object[] — without this cast, C# treats
+                    // `series` itself as the whole args array (spreading each tag as a separate JS
+                    // argument) instead of passing it as the single `list` parameter setSeries expects.
+                    await JS.InvokeVoidAsync("trendChart.setSeries", (object)series);
+                    Diagnostics.Add($"Trend chart: now tracking {series.Length} series ({string.Join(", ", series.Select(s => s.nodeId))}).");
+                }
+                catch (Exception ex)
+                {
+                    Diagnostics.Add($"Trend chart failed to update series: {ex.Message}");
+                }
+            }
+        }
+        else
+        {
+            _chartJsInitialized = false;
         }
     }
 
@@ -375,6 +740,153 @@
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
     private async Task SubscribeSelected() => await Opc.SubscribeSelectedAsync();
     private async Task StopSubscription() => await Opc.StopSubscriptionAsync();
+
+    private async Task TrendSelected()
+    {
+        await Opc.TrendSelectedAsync();
+        _chartDirty = true;
+    }
+
+    private async Task ToggleTagTrend(string nodeId)
+    {
+        if (Opc.TrendedNodeIds.Contains(nodeId, StringComparer.OrdinalIgnoreCase))
+        {
+            await RemoveFromChart(nodeId);
+        }
+        else
+        {
+            await Opc.AddToTrendAsync(nodeId);
+            _chartDirty = true;
+        }
+    }
+
+    private async Task OnTrendWindowChanged(ChangeEventArgs e)
+    {
+        if (!int.TryParse(e.Value?.ToString(), out var seconds) || seconds <= 0)
+            return;
+
+        _trendWindowSeconds = seconds;
+        try
+        {
+            await JS.InvokeVoidAsync("trendChart.setWindow", seconds * 1000);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Add($"Trend chart failed to update window: {ex.Message}");
+        }
+    }
+
+    private void ToggleTrendAxis(string nodeId)
+    {
+        Opc.ToggleTrendAxis(nodeId);
+        _chartDirty = true;
+    }
+
+    private async Task RemoveFromChart(string nodeId)
+    {
+        Opc.RemoveFromTrend(nodeId);
+        _nonNumericTrendTags.Remove(nodeId);
+        try
+        {
+            await JS.InvokeVoidAsync("trendChart.removeSeries", nodeId);
+        }
+        catch (Exception ex)
+        {
+            Diagnostics.Add($"Trend chart failed to remove a series: {ex.Message}");
+        }
+    }
+
+    private void ClearChart()
+    {
+        Opc.ClearTrend();
+        _nonNumericTrendTags.Clear();
+    }
+
+    private readonly HashSet<string> _nonNumericTrendTags = new(StringComparer.OrdinalIgnoreCase);
+    private bool _addPointErrorLogged;
+
+    private void OnTrendUpdate(TagReading reading)
+    {
+        if (!TryGetNumeric(reading.Value, out var numericValue))
+        {
+            if (_nonNumericTrendTags.Add(reading.NodeId))
+            {
+                var typeName = reading.Value?.GetType().Name ?? "null";
+                Diagnostics.Add($"Trend chart: '{reading.NodeId}' value '{reading.Value}' ({typeName}) is not numeric — not plotted.");
+                _ = InvokeAsync(StateHasChanged);
+            }
+            return;
+        }
+
+        if (_nonNumericTrendTags.Remove(reading.NodeId))
+            _ = InvokeAsync(StateHasChanged);
+
+        var nodeId = reading.NodeId;
+        var timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        _ = InvokeAsync(async () =>
+        {
+            try
+            {
+                await JS.InvokeVoidAsync("trendChart.addPoint", nodeId, timestampMs, numericValue);
+            }
+            catch (Exception ex)
+            {
+                if (!_addPointErrorLogged)
+                {
+                    _addPointErrorLogged = true;
+                    Diagnostics.Add($"Trend chart failed to plot a point: {ex.Message}");
+                }
+            }
+        });
+    }
+
+    private static bool TryGetNumeric(object? value, out double result)
+    {
+        // Some OPC UA servers report scalar values wrapped as a 1-element array.
+        if (value is Array { Length: 1 } singleElementArray)
+            value = singleElementArray.GetValue(0);
+
+        switch (value)
+        {
+            case double d: result = d; return true;
+            case float f: result = f; return true;
+            case decimal m: result = (double)m; return true;
+            case bool b: result = b ? 1 : 0; return true;
+            case IConvertible conv:
+                try
+                {
+                    result = conv.ToDouble(System.Globalization.CultureInfo.InvariantCulture);
+                    return true;
+                }
+                catch
+                {
+                    result = 0;
+                    return false;
+                }
+            default:
+                result = 0;
+                return false;
+        }
+    }
+
+    private async Task StartRecording()
+    {
+        try
+        {
+            var path = await JS.InvokeAsync<string>("showSaveDialog", "CSV Files|*.csv");
+            if (string.IsNullOrEmpty(path))
+                return;
+
+            await Opc.StartRecordingAsync(path);
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private async Task StopRecording() => await Opc.StopRecordingAsync();
 
     private async Task TrustCertificate(string thumbprint)
         => await Opc.TrustCertificateAsync(thumbprint);
@@ -473,6 +985,15 @@
     private bool _nodeDetailsOpen;
     private bool _nodeDetailsLoading;
 
+    private bool _writeDialogOpen;
+    private string? _writeDialogNodeId;
+    private string? _writeDialogDisplayName;
+    private string? _writeDialogDataType;
+    private string _writeDialogValue = string.Empty;
+    private string? _writeDialogError;
+
+    private readonly Dictionary<string, string> _writeInputByNodeId = new(StringComparer.OrdinalIgnoreCase);
+
     private void HandleContextMenu((OpcTag Tag, MouseEventArgs Args) e)
     {
         _contextMenuTag = e.Tag;
@@ -510,6 +1031,58 @@
         _nodeDetails = null;
     }
 
+    private void ShowWriteDialog()
+    {
+        var tag = _contextMenuTag;
+        CloseContextMenu();
+        if (tag is null || !tag.IsSelectable)
+            return;
+
+        var reading = FindReading(tag.NodeId);
+        _writeDialogNodeId = tag.NodeId;
+        _writeDialogDisplayName = tag.DisplayName;
+        _writeDialogDataType = reading?.DataType ?? tag.DataType;
+        _writeDialogValue = reading?.Value?.ToString() ?? tag.Value?.ToString() ?? string.Empty;
+        _writeDialogError = null;
+        _writeDialogOpen = true;
+    }
+
+    private void CloseWriteDialog()
+    {
+        _writeDialogOpen = false;
+        _writeDialogNodeId = null;
+        _writeDialogError = null;
+    }
+
+    private async Task SubmitWriteDialog()
+    {
+        if (string.IsNullOrWhiteSpace(_writeDialogNodeId) || string.IsNullOrWhiteSpace(_writeDialogValue))
+            return;
+
+        var result = await Opc.WriteValueAsync(_writeDialogNodeId, _writeDialogValue);
+        if (result?.Error is not null)
+            _writeDialogError = result.Error;
+        else
+            CloseWriteDialog();
+    }
+
+    private async Task OnWriteDialogKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter")
+            await SubmitWriteDialog();
+    }
+
+    private string GetWriteInput(string nodeId)
+        => _writeInputByNodeId.TryGetValue(nodeId, out var v) ? v : string.Empty;
+
+    private async Task WriteInlineValue(string nodeId)
+    {
+        if (!_writeInputByNodeId.TryGetValue(nodeId, out var rawValue) || string.IsNullOrWhiteSpace(rawValue))
+            return;
+
+        await Opc.WriteValueAsync(nodeId, rawValue);
+    }
+
     private void OnServiceStateChanged()
     {
         _ = InvokeAsync(StateHasChanged);
@@ -534,5 +1107,6 @@
     public void Dispose()
     {
         Opc.StateChanged -= OnServiceStateChanged;
+        Opc.TrendUpdate -= OnTrendUpdate;
     }
 }

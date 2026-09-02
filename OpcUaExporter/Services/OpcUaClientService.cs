@@ -215,6 +215,86 @@ public class OpcUaClientService
         return rows;
     }
 
+    /// <summary>Writes a single value to a node's Value attribute, converting the raw input to the node's data type.</summary>
+    public async Task<TagReading> WriteAsync(ConnectionProfile profile, string nodeId, string rawValue, string? dataTypeHint = null, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(nodeId))
+            throw new InvalidOperationException("Node id is required.");
+
+        using var session = await CreateSessionAsync(profile, ct);
+
+        var parsedNodeId = NodeId.Parse(nodeId);
+        var row = new TagReading { NodeId = nodeId };
+
+        try
+        {
+            var dataTypeName = dataTypeHint;
+            if (string.IsNullOrWhiteSpace(dataTypeName))
+            {
+                var node = await session.ReadNodeAsync(parsedNodeId, ct);
+                row.DisplayName = node?.DisplayName?.Text ?? nodeId;
+                dataTypeName = await TryGetDataTypeName(node, session);
+            }
+
+            var value = ConvertValueForWrite(dataTypeName, rawValue);
+
+            var writeValueCollection = new WriteValueCollection
+            {
+                new WriteValue
+                {
+                    NodeId = parsedNodeId,
+                    AttributeId = Attributes.Value,
+                    Value = new DataValue(new Variant(value))
+                }
+            };
+
+            var writeResponse = await session.WriteAsync(null, writeValueCollection, ct);
+            var status = writeResponse?.Results?[0] ?? StatusCodes.BadUnexpectedError;
+
+            row.Quality = status.ToString();
+            row.DataType = dataTypeName;
+            row.Timestamp = DateTime.UtcNow.ToString("o");
+
+            if (StatusCode.IsBad(status))
+                row.Error = $"Write rejected by server: {status}";
+            else
+                _diagnostics.Add($"Wrote '{rawValue}' to '{nodeId}'.");
+        }
+        catch (Exception ex)
+        {
+            row.Error = ex.Message;
+        }
+
+        return row;
+    }
+
+    /// <summary>Converts a raw string into the .NET type matching the node's OPC UA built-in data type.</summary>
+    private static object ConvertValueForWrite(string? dataTypeName, string rawValue)
+    {
+        if (dataTypeName is null || !Enum.TryParse<BuiltInType>(dataTypeName, ignoreCase: true, out var builtInType))
+            return rawValue;
+
+        var ci = System.Globalization.CultureInfo.InvariantCulture;
+        return builtInType switch
+        {
+            BuiltInType.Boolean  => bool.Parse(rawValue),
+            BuiltInType.SByte    => sbyte.Parse(rawValue, ci),
+            BuiltInType.Byte     => byte.Parse(rawValue, ci),
+            BuiltInType.Int16    => short.Parse(rawValue, ci),
+            BuiltInType.UInt16   => ushort.Parse(rawValue, ci),
+            BuiltInType.Int32    => int.Parse(rawValue, ci),
+            BuiltInType.UInt32   => uint.Parse(rawValue, ci),
+            BuiltInType.Int64    => long.Parse(rawValue, ci),
+            BuiltInType.UInt64   => ulong.Parse(rawValue, ci),
+            BuiltInType.Float    => float.Parse(rawValue, ci),
+            BuiltInType.Double   => double.Parse(rawValue, ci),
+            BuiltInType.DateTime => DateTime.Parse(rawValue, ci, System.Globalization.DateTimeStyles.RoundtripKind),
+            BuiltInType.Guid     => Guid.Parse(rawValue),
+            BuiltInType.String   => rawValue,
+            _                    => rawValue
+        };
+    }
+
     public async Task TestConnectionAsync(ConnectionProfile profile, CancellationToken ct = default)
     {
         using var session = await CreateSessionAsync(profile, ct);
