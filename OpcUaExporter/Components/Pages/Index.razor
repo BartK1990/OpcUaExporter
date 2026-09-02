@@ -247,10 +247,10 @@
                                     <col style="width:160px;" />
                                     <col style="width:220px;" />
                                     <col style="width:110px;" />
+                                    <col style="width:150px;" />
                                     <col style="width:110px;" />
                                     <col style="width:90px;" />
                                     <col style="width:170px;" />
-                                    <col style="width:150px;" />
                                 </colgroup>
                                 <thead>
                                     <tr>
@@ -263,10 +263,10 @@
                                         </th>
                                         <th class="resizable-th"><span class="th-label">Node ID</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Value</span><span class="col-resize-handle"></span></th>
+                                        <th class="resizable-th"><span class="th-label">Write</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Data Type</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Quality</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Timestamp</span><span class="col-resize-handle"></span></th>
-                                        <th class="resizable-th"><span class="th-label">Write</span><span class="col-resize-handle"></span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -293,9 +293,6 @@
                                             <td>@tag.DisplayName</td>
                                             <td class="mono">@tag.NodeId</td>
                                             <td class="mono">@(reading?.Error ?? reading?.Value?.ToString() ?? "–")</td>
-                                            <td>@(reading?.DataType ?? tag.DataType)</td>
-                                            <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
-                                            <td class="mono">@reading?.Timestamp</td>
                                             <td>
                                                 <div class="inline-write">
                                                     <input class="mono write-input" placeholder="value"
@@ -306,6 +303,9 @@
                                                             @onclick="() => WriteInlineValue(tag.NodeId)">✎</button>
                                                 </div>
                                             </td>
+                                            <td>@(reading?.DataType ?? tag.DataType)</td>
+                                            <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
+                                            <td class="mono">@reading?.Timestamp</td>
                                         </tr>
                                     }
                                 </tbody>
