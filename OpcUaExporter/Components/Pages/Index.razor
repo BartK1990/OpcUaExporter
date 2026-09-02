@@ -211,15 +211,15 @@
                             ▶ Read Values
                         </button>
 
-                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SubscribableCount == 0)" title="Subscribes to the tags checked in the 🔔 column below">
-                            🔔 Subscribe
+                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)" title="Checks the 🔔 box for every selected tag and subscribes to all of them">
+                            🔔 Subscribe All
                         </button>
 
                         <button class="btn btn-secondary" @onclick="TrendSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                             📈 Trend All
                         </button>
 
-                        <button class="btn btn-ghost" @onclick="() => Opc.SelectAll(false)" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                        <button class="btn btn-ghost" @onclick="ClearSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                             ✕ Clear All
                         </button>
                     </div>
@@ -534,7 +534,6 @@
     private bool _selectedOnly;
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
-    private int SubscribableCount => Opc.GetSubscribeEnabledNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
     private List<OpcTag> SelectedTags
     {
@@ -744,6 +743,7 @@
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
     private async Task SubscribeSelected() => await Opc.SubscribeSelectedAsync();
     private async Task StopSubscription() => await Opc.StopSubscriptionAsync();
+    private async Task ClearSelected() => await Opc.ClearSelectionAsync();
 
     private async Task TrendSelected()
     {

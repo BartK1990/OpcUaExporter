@@ -12,8 +12,8 @@ public class OpcTag
     public string? Quality    { get; set; }
     public bool   IsSelected  { get; set; }
 
-    /// <summary>Whether this tag should be included the next time "Subscribe" is (re)triggered for the selected tags. Defaults to on.</summary>
-    public bool   IsSubscribeEnabled { get; set; } = true;
+    /// <summary>Whether this tag is included in the live subscription. Off by default until checked or "Subscribe All" is used.</summary>
+    public bool   IsSubscribeEnabled { get; set; }
     public List<OpcTag> Children { get; set; } = [];
 
     /// <summary>Whether this node can be checked/selected (only Variable nodes carry a value to export).</summary>
