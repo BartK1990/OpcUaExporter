@@ -58,7 +58,18 @@
         ctx.save();
         ctx.clearRect(0, 0, w, h);
 
-        var now = Date.now();
+        // Anchor the visible window to the newest data point actually received rather than
+        // an independently-computed wall-clock "now" — keeps the chart correct even if the
+        // .NET host clock and the WebView2 JS clock ever drift apart.
+        var latestT = -Infinity;
+        state.order.forEach(function (id) {
+            var s = state.series[id];
+            if (!s) return;
+            s.points.forEach(function (p) {
+                if (p.t > latestT) latestT = p.t;
+            });
+        });
+        var now = latestT === -Infinity ? Date.now() : latestT;
         var tMin = now - WINDOW_MS;
         var tMax = now;
 

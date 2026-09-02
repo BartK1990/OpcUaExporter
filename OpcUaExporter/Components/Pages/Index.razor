@@ -3,6 +3,7 @@
 @using OpcUaExporter.Services
 @inject OpcUaService Opc
 @inject IJSRuntime JS
+@inject DiagnosticsLogService Diagnostics
 @implements IDisposable
 
 <div class="app-shell">
@@ -309,9 +310,14 @@
                             @foreach (var t in Opc.GetTrendedTagInfos())
                             {
                                 var color = Palette[trendIndex++ % Palette.Length];
+                                var isNonNumeric = _nonNumericTrendTags.Contains(t.NodeId);
                                 <span class="legend-chip">
                                     <span class="legend-dot" style="background:@color;"></span>
                                     @t.DisplayName
+                                    @if (isNonNumeric)
+                                    {
+                                        <span class="legend-note" title="This tag's value isn't numeric, so it can't be plotted.">not numeric</span>
+                                    }
                                     <button type="button" class="legend-remove" title="Remove from chart" @onclick="() => RemoveFromChart(t.NodeId)">✕</button>
                                 </span>
                             }
@@ -545,27 +551,39 @@
 
         if (Opc.IsChartVisible)
         {
-            try
+            if (!_chartJsInitialized)
             {
-                if (!_chartJsInitialized)
+                try
                 {
                     await JS.InvokeVoidAsync("trendChart.init", _chartCanvasRef);
                     _chartJsInitialized = true;
                     _chartDirty = true;
                 }
-
-                if (_chartDirty)
+                catch (Exception ex)
                 {
-                    _chartDirty = false;
+                    Diagnostics.Add($"Trend chart failed to initialize: {ex.Message}");
+                }
+            }
+
+            if (_chartDirty)
+            {
+                _chartDirty = false;
+                try
+                {
                     var series = Opc.GetTrendedTagInfos()
                         .Select(t => new { nodeId = t.NodeId, label = t.DisplayName })
                         .ToArray();
-                    await JS.InvokeVoidAsync("trendChart.setSeries", series);
+                    // Cast to object: InvokeVoidAsync takes `params object?[] args`, and an array of a
+                    // reference type is array-covariant with object[] — without this cast, C# treats
+                    // `series` itself as the whole args array (spreading each tag as a separate JS
+                    // argument) instead of passing it as the single `list` parameter setSeries expects.
+                    await JS.InvokeVoidAsync("trendChart.setSeries", (object)series);
+                    Diagnostics.Add($"Trend chart: now tracking {series.Length} series ({string.Join(", ", series.Select(s => s.nodeId))}).");
                 }
-            }
-            catch
-            {
-                // JS interop not available in some preview modes – ignore
+                catch (Exception ex)
+                {
+                    Diagnostics.Add($"Trend chart failed to update series: {ex.Message}");
+                }
             }
         }
         else
@@ -593,22 +611,41 @@
     private async Task RemoveFromChart(string nodeId)
     {
         Opc.RemoveFromTrend(nodeId);
+        _nonNumericTrendTags.Remove(nodeId);
         try
         {
             await JS.InvokeVoidAsync("trendChart.removeSeries", nodeId);
         }
-        catch
+        catch (Exception ex)
         {
-            // JS interop not available in some preview modes – ignore
+            Diagnostics.Add($"Trend chart failed to remove a series: {ex.Message}");
         }
     }
 
-    private void ClearChart() => Opc.ClearTrend();
+    private void ClearChart()
+    {
+        Opc.ClearTrend();
+        _nonNumericTrendTags.Clear();
+    }
+
+    private readonly HashSet<string> _nonNumericTrendTags = new(StringComparer.OrdinalIgnoreCase);
+    private bool _addPointErrorLogged;
 
     private void OnTrendUpdate(TagReading reading)
     {
         if (!TryGetNumeric(reading.Value, out var numericValue))
+        {
+            if (_nonNumericTrendTags.Add(reading.NodeId))
+            {
+                var typeName = reading.Value?.GetType().Name ?? "null";
+                Diagnostics.Add($"Trend chart: '{reading.NodeId}' value '{reading.Value}' ({typeName}) is not numeric — not plotted.");
+                _ = InvokeAsync(StateHasChanged);
+            }
             return;
+        }
+
+        if (_nonNumericTrendTags.Remove(reading.NodeId))
+            _ = InvokeAsync(StateHasChanged);
 
         var nodeId = reading.NodeId;
         var timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -619,15 +656,23 @@
             {
                 await JS.InvokeVoidAsync("trendChart.addPoint", nodeId, timestampMs, numericValue);
             }
-            catch
+            catch (Exception ex)
             {
-                // JS interop not available in some preview modes – ignore
+                if (!_addPointErrorLogged)
+                {
+                    _addPointErrorLogged = true;
+                    Diagnostics.Add($"Trend chart failed to plot a point: {ex.Message}");
+                }
             }
         });
     }
 
     private static bool TryGetNumeric(object? value, out double result)
     {
+        // Some OPC UA servers report scalar values wrapped as a 1-element array.
+        if (value is Array { Length: 1 } singleElementArray)
+            value = singleElementArray.GetValue(0);
+
         switch (value)
         {
             case double d: result = d; return true;

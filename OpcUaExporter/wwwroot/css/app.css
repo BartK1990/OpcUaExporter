@@ -406,6 +406,13 @@ body.row-resizing * {
     flex-shrink: 0;
 }
 
+.legend-note {
+    color: var(--red);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+
 .legend-remove {
     background: transparent;
     border: none;
