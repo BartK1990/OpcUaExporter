@@ -33,6 +33,11 @@
         try
         {
             await JS.InvokeVoidAsync("setTheme", ThemeSvc.Theme == AppTheme.Light ? "light" : "dark");
+
+            // Redraws the trend chart (if one is on screen) so it immediately
+            // picks up the new grid/label colors instead of waiting for the
+            // next data point.
+            await JS.InvokeVoidAsync("trendChart.themeChanged");
         }
         catch
         {
