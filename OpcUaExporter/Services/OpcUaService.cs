@@ -271,8 +271,6 @@ public class OpcUaService
 
     public async Task ReadSelectedAsync(CancellationToken ct = default)
     {
-        await StopSubscriptionAsync();
-
         var selected = GetSelectedNodeIds();
         if (!selected.Any())
         {
