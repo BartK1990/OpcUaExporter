@@ -7,29 +7,11 @@
 
 <div class="app-shell">
 
-    <aside class="sidebar">
-        <div class="sidebar-header">
-            <div class="logo">
-                <img class="logo-icon" src="app.ico" />
-                <span class="logo-text">OPC UA<br><small>Exporter</small></span>
-            </div>
-            <ThemeToggle />
-        </div>
-
-        <section class="panel">
-            <h3 class="panel-title">Navigation</h3>
-            <nav class="nav-menu">
-                <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
-                <NavLink href="/connection-settings" class="btn btn-ghost nav-link">Connection Settings</NavLink>
-                <NavLink href="/discover-servers" class="btn btn-ghost nav-link">Discover Servers</NavLink>
-                <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
-            </nav>
-        </section>
-
+    <AppSidebar>
         <div class="status-bar @(Opc.HasError ? "status-error" : "status-ok")">
             @Opc.StatusMessage
         </div>
-    </aside>
+    </AppSidebar>
 
     <main class="content">
         <section class="browser-panel connection-settings-scroll">

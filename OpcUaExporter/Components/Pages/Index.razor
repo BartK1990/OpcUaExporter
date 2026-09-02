@@ -4,38 +4,13 @@
 @inject OpcUaService Opc
 @inject IJSRuntime JS
 @inject DiagnosticsLogService Diagnostics
+@inject ThemeService ThemeSvc
 @implements IDisposable
 
 <div class="app-shell">
 
     <!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
-    <aside class="sidebar @(_sidebarCollapsed ? "sidebar-collapsed" : "")">
-        <button type="button" class="sidebar-toggle"
-                title="@(_sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")"
-                @onclick="() => _sidebarCollapsed = !_sidebarCollapsed">
-            @(_sidebarCollapsed ? "»" : "«")
-        </button>
-
-        @if (!_sidebarCollapsed)
-        {
-        <div class="sidebar-header">
-            <div class="logo">
-                <img class="logo-icon" src="app.ico" />
-                <span class="logo-text">OPC UA<br><small>Exporter</small></span>
-            </div>
-            <ThemeToggle />
-        </div>
-
-        <section class="panel">
-            <h3 class="panel-title">Navigation</h3>
-            <nav class="nav-menu">
-                <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
-                <NavLink href="/connection-settings" class="btn btn-ghost nav-link">Connection Settings</NavLink>
-                <NavLink href="/discover-servers" class="btn btn-ghost nav-link">Discover Servers</NavLink>
-                <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
-            </nav>
-        </section>
-
+    <AppSidebar>
         @if (Opc.PendingCertificates.Any())
         {
             <section class="panel">
@@ -131,8 +106,7 @@
         <div class="status-bar @(Opc.HasError ? "status-error" : "status-ok")">
             @Opc.StatusMessage
         </div>
-        }
-    </aside>
+    </AppSidebar>
 
     <!-- ═══════════════════════ MAIN CONTENT ═══════════════════════ -->
     <main class="content">
@@ -140,7 +114,6 @@
         @if (!Opc.TagTree.Any() && !Opc.IsBusy)
         {
             <div class="empty-state">
-                <div class="empty-icon">⬡</div>
                 <h2>No Tags Loaded</h2>
                 <p>Enter your OPC UA server endpoint and click <strong>Browse Tags</strong>.</p>
             </div>
@@ -204,6 +177,11 @@
                     <div class="content-header">
                         <h2>Selected Tags</h2>
                         <span class="badge">@SelectedCount tag(s)</span>
+                        <button class="btn btn-ghost compact-toggle @(ThemeSvc.CompactSelectedRows ? "active" : "")"
+                                title="@(ThemeSvc.CompactSelectedRows ? "Switch to normal row height" : "Switch to compact row height")"
+                                @onclick="() => ThemeSvc.SetCompactSelectedRows(!ThemeSvc.CompactSelectedRows)">
+                            ☰ Compact
+                        </button>
                     </div>
 
                     <div class="btn-row selected-actions">
@@ -260,7 +238,7 @@
                     }
                     else
                     {
-                        <div class="table-wrapper selected-table-wrapper">
+                        <div class="table-wrapper selected-table-wrapper @(ThemeSvc.CompactSelectedRows ? "compact" : "")">
                             <table class="data-table resizable-table">
                                 <colgroup>
                                     <col style="width:36px;" />
@@ -269,10 +247,10 @@
                                     <col style="width:160px;" />
                                     <col style="width:220px;" />
                                     <col style="width:110px;" />
+                                    <col style="width:150px;" />
                                     <col style="width:110px;" />
                                     <col style="width:90px;" />
                                     <col style="width:170px;" />
-                                    <col style="width:150px;" />
                                 </colgroup>
                                 <thead>
                                     <tr>
@@ -285,10 +263,10 @@
                                         </th>
                                         <th class="resizable-th"><span class="th-label">Node ID</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Value</span><span class="col-resize-handle"></span></th>
+                                        <th class="resizable-th"><span class="th-label">Write</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Data Type</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Quality</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Timestamp</span><span class="col-resize-handle"></span></th>
-                                        <th class="resizable-th"><span class="th-label">Write</span><span class="col-resize-handle"></span></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -315,9 +293,6 @@
                                             <td>@tag.DisplayName</td>
                                             <td class="mono">@tag.NodeId</td>
                                             <td class="mono">@(reading?.Error ?? reading?.Value?.ToString() ?? "–")</td>
-                                            <td>@(reading?.DataType ?? tag.DataType)</td>
-                                            <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
-                                            <td class="mono">@reading?.Timestamp</td>
                                             <td>
                                                 <div class="inline-write">
                                                     <input class="mono write-input" placeholder="value"
@@ -328,6 +303,9 @@
                                                             @onclick="() => WriteInlineValue(tag.NodeId)">✎</button>
                                                 </div>
                                             </td>
+                                            <td>@(reading?.DataType ?? tag.DataType)</td>
+                                            <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
+                                            <td class="mono">@reading?.Timestamp</td>
                                         </tr>
                                     }
                                 </tbody>
@@ -524,7 +502,6 @@
     private bool _chartJsInitialized;
     private bool _chartDirty;
     private bool _legendCollapsed;
-    private bool _sidebarCollapsed;
     private int _trendWindowSeconds = 60;
 
     private string _tagFilter = string.Empty;
@@ -660,6 +637,7 @@
     {
         Opc.StateChanged += OnServiceStateChanged;
         Opc.TrendUpdate += OnTrendUpdate;
+        ThemeSvc.CompactSelectedRowsChanged += OnServiceStateChanged;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -1108,5 +1086,6 @@
     {
         Opc.StateChanged -= OnServiceStateChanged;
         Opc.TrendUpdate -= OnTrendUpdate;
+        ThemeSvc.CompactSelectedRowsChanged -= OnServiceStateChanged;
     }
 }
