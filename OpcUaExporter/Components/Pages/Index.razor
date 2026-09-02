@@ -120,15 +120,14 @@
         }
         else
         {
-            <div class="content-header">
-                <h2>Tag Browser</h2>
-                <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
-            </div>
-
             <div class="browse-layout">
 
                 <!-- Tag tree (left pane) -->
                 <section class="browser-panel">
+                    <div class="content-header">
+                        <h2>Tag Browser</h2>
+                        <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
+                    </div>
                     <div class="tag-search-row">
                         <input class="field-input tag-search-input" placeholder="🔍 Search by name or node ID…"
                                @bind="_tagFilter" @bind:event="oninput" />
