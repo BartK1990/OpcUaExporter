@@ -69,6 +69,7 @@ body {
     background: var(--bg-0);
     color: var(--text-primary);
     line-height: 1.5;
+    text-rendering: optimizeLegibility;
 }
 
 /* ── App shell ──────────────────────────────────────────── */
@@ -151,11 +152,11 @@ body {
 }
 
 .logo-text {
-    font-family: var(--font-head);
+    font-family: var(--font-ui);
     font-size: 15px;
     font-weight: 700;
     color: var(--text-primary);
-    line-height: 1.2;
+    line-height: 1.5;
     letter-spacing: .02em;
 }
 
@@ -649,10 +650,11 @@ body.row-resizing * {
 }
 
 .content-header h2 {
-    font-family: var(--font-head);
+    font-family: var(--font-ui);
     font-size: 16px;
     font-weight: 700;
     color: var(--text-primary);
+    line-height: 1.5;
 }
 
 .badge {
@@ -694,9 +696,11 @@ body.row-resizing * {
 }
 
 .empty-state h2 {
-    font-family: var(--font-head);
+    font-family: var(--font-ui);
     font-size: 18px;
+    font-weight: 700;
     color: var(--text-secondary);
+    line-height: 1.5;
 }
 
 .empty-state p {
@@ -1131,10 +1135,11 @@ body.col-resizing * {
 }
 
 .modal-header h3 {
-    font-family: var(--font-head);
+    font-family: var(--font-ui);
     font-size: 15px;
     font-weight: 700;
     color: var(--text-primary);
+    line-height: 1.5;
 }
 
 .modal-body {
