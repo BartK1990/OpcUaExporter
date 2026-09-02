@@ -63,14 +63,17 @@ public class OpcUaService
     public IReadOnlySet<string> SubscribedNodeIds => _subscribedNodeIds;
     private Dictionary<string, string> _displayNameByNodeId = new(StringComparer.OrdinalIgnoreCase);
 
-    // CSV recording (appends one row per live subscription update)
+    // CSV recording (column-per-tag: one row per live update, latest known value/quality per tag)
     private StreamWriter? _recordingWriter;
+    private List<string> _recordingNodeIds = new();
+    private readonly Dictionary<string, TagReading> _recordingLatestByNodeId = new(StringComparer.OrdinalIgnoreCase);
     public bool   IsRecording       { get; private set; }
     public string? RecordingFilePath { get; private set; }
     public int    RecordedRowCount  { get; private set; }
 
     // Live trend chart (subset of subscribed tags plotted on the chart)
     private readonly List<string> _trendedNodeIds = new();
+    private readonly Dictionary<string, string> _trendAxisByNodeId = new(StringComparer.OrdinalIgnoreCase);
     public IReadOnlyList<string> TrendedNodeIds => _trendedNodeIds;
     public bool IsChartVisible { get; private set; }
 
@@ -335,7 +338,9 @@ public class OpcUaService
                 await SubscribeToAsync(selected, ct);
 
             var writer = new StreamWriter(filePath, append: false, new UTF8Encoding(false)) { AutoFlush = true };
-            writer.WriteLine("Timestamp,NodeId,DisplayName,Value,Quality");
+            var header = new List<string> { "Timestamp" };
+            header.AddRange(selected.Select(id => _displayNameByNodeId.TryGetValue(id, out var dn) ? dn : id));
+            writer.WriteLine(string.Join(',', header.Select(EscapeCsv)));
 
             lock (_subscriptionSync)
             {
@@ -344,6 +349,8 @@ public class OpcUaService
                 RecordingFilePath = filePath;
                 RecordedRowCount = 0;
                 IsRecording = true;
+                _recordingNodeIds = selected.ToList();
+                _recordingLatestByNodeId.Clear();
             }
 
             SetStatus($"Recording selected tags to: {filePath}");
@@ -358,6 +365,8 @@ public class OpcUaService
             writer = _recordingWriter;
             _recordingWriter = null;
             IsRecording = false;
+            _recordingNodeIds = new();
+            _recordingLatestByNodeId.Clear();
         }
 
         writer?.Dispose();
@@ -385,7 +394,36 @@ public class OpcUaService
             {
                 if (!_trendedNodeIds.Contains(id, StringComparer.OrdinalIgnoreCase))
                     _trendedNodeIds.Add(id);
+                if (!_trendAxisByNodeId.ContainsKey(id))
+                    _trendAxisByNodeId[id] = "left";
             }
+
+            IsChartVisible = true;
+            SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
+        });
+    }
+
+    /// <summary>Adds a single tag to the live trend chart, subscribing to it (alongside any existing subscriptions) if necessary.</summary>
+    public async Task AddToTrendAsync(string nodeId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(nodeId))
+            return;
+
+        await RunSafe(async () =>
+        {
+            if (!_subscribedNodeIds.Contains(nodeId))
+            {
+                var union = _subscribedNodeIds
+                    .Append(nodeId)
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+                await SubscribeToAsync(union, ct);
+            }
+
+            if (!_trendedNodeIds.Contains(nodeId, StringComparer.OrdinalIgnoreCase))
+                _trendedNodeIds.Add(nodeId);
+            if (!_trendAxisByNodeId.ContainsKey(nodeId))
+                _trendAxisByNodeId[nodeId] = "left";
 
             IsChartVisible = true;
             SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
@@ -395,6 +433,7 @@ public class OpcUaService
     public void RemoveFromTrend(string nodeId)
     {
         _trendedNodeIds.RemoveAll(id => string.Equals(id, nodeId, StringComparison.OrdinalIgnoreCase));
+        _trendAxisByNodeId.Remove(nodeId);
         if (_trendedNodeIds.Count == 0)
             IsChartVisible = false;
         Notify();
@@ -403,13 +442,25 @@ public class OpcUaService
     public void ClearTrend()
     {
         _trendedNodeIds.Clear();
+        _trendAxisByNodeId.Clear();
         IsChartVisible = false;
         Notify();
     }
 
-    public List<(string NodeId, string DisplayName)> GetTrendedTagInfos()
+    /// <summary>Flips a trended tag's chart y-axis between "left" (default) and "right".</summary>
+    public void ToggleTrendAxis(string nodeId)
+    {
+        var current = _trendAxisByNodeId.TryGetValue(nodeId, out var a) ? a : "left";
+        _trendAxisByNodeId[nodeId] = current == "left" ? "right" : "left";
+        Notify();
+    }
+
+    public List<(string NodeId, string DisplayName, string Axis)> GetTrendedTagInfos()
         => _trendedNodeIds
-            .Select(id => (NodeId: id, DisplayName: _displayNameByNodeId.TryGetValue(id, out var n) ? n : id))
+            .Select(id => (
+                NodeId: id,
+                DisplayName: _displayNameByNodeId.TryGetValue(id, out var n) ? n : id,
+                Axis: _trendAxisByNodeId.TryGetValue(id, out var a) ? a : "left"))
             .ToList();
 
     private async Task SubscribeToAsync(List<string> selected, CancellationToken ct)
@@ -637,6 +688,29 @@ public class OpcUaService
         return result;
     }
 
+    /// <summary>Writes a single value to a node, using its known DataType (if browsed) to convert the raw input.</summary>
+    public async Task<TagReading?> WriteValueAsync(string nodeId, string rawValue, CancellationToken ct = default)
+    {
+        TagReading? result = null;
+
+        await RunSafe(async () =>
+        {
+            SetStatus($"Writing value to '{nodeId}'…");
+            var dataTypeHint = FlattenAll(TagTree)
+                .FirstOrDefault(t => string.Equals(t.NodeId, nodeId, StringComparison.OrdinalIgnoreCase))
+                ?.DataType;
+
+            result = await _bridge.WriteAsync(Profile, nodeId, rawValue, dataTypeHint, ct);
+
+            if (result.Error is not null)
+                SetStatus($"Write failed: {result.Error}", isError: true);
+            else
+                SetStatus($"Wrote '{rawValue}' to '{nodeId}'.");
+        });
+
+        return result;
+    }
+
     public void SelectAll(bool select)
     {
         foreach (var tag in FlattenAll(TagTree).Where(t => t.IsSelectable))
@@ -817,22 +891,31 @@ public class OpcUaService
         Notify();
     }
 
+    /// <summary>Writes one wide-format row: the triggering update's timestamp, plus the latest known value
+    /// (or "-" if never received, errored, or of bad quality) for every recorded tag.</summary>
     private void WriteRecordingRow(TagReading update)
     {
         if (_recordingWriter is null)
             return;
 
-        var displayName = _displayNameByNodeId.TryGetValue(update.NodeId, out var dn) ? dn : update.DisplayName;
+        _recordingLatestByNodeId[update.NodeId] = update;
 
-        _recordingWriter.WriteLine(string.Join(',',
-            EscapeCsv(update.Timestamp ?? DateTime.UtcNow.ToString("o")),
-            EscapeCsv(update.NodeId),
-            EscapeCsv(displayName),
-            EscapeCsv(update.Error ?? update.Value?.ToString()),
-            EscapeCsv(update.Quality)));
+        var fields = new List<string> { EscapeCsv(update.Timestamp ?? DateTime.UtcNow.ToString("o")) };
+        foreach (var nodeId in _recordingNodeIds)
+        {
+            _recordingLatestByNodeId.TryGetValue(nodeId, out var reading);
+            fields.Add(EscapeCsv(IsBadQuality(reading) ? "-" : reading!.Value?.ToString() ?? "-"));
+        }
 
+        _recordingWriter.WriteLine(string.Join(',', fields));
         RecordedRowCount++;
     }
+
+    private static bool IsBadQuality(TagReading? reading)
+        => reading is null
+           || reading.Error is not null
+           || reading.Quality is null
+           || reading.Quality.Contains("Bad", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Tears down just the live OPC UA subscription handle, leaving recording/trend state untouched (used when resubscribing to a new tag selection).</summary>
     private async Task<bool> StopActiveSubscriptionHandleAsync()
@@ -872,6 +955,8 @@ public class OpcUaService
             writer = _recordingWriter;
             _recordingWriter = null;
             IsRecording = false;
+            _recordingNodeIds = new();
+            _recordingLatestByNodeId.Clear();
         }
         writer?.Dispose();
 
