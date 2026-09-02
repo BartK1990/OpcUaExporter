@@ -10,33 +10,7 @@
 <div class="app-shell">
 
     <!-- ═══════════════════════ SIDEBAR ═══════════════════════ -->
-    <aside class="sidebar @(_sidebarCollapsed ? "sidebar-collapsed" : "")">
-        <button type="button" class="sidebar-toggle"
-                title="@(_sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar")"
-                @onclick="() => _sidebarCollapsed = !_sidebarCollapsed">
-            @(_sidebarCollapsed ? "»" : "«")
-        </button>
-
-        @if (!_sidebarCollapsed)
-        {
-        <div class="sidebar-header">
-            <div class="logo">
-                <img class="logo-icon" src="app.ico" />
-                <span class="logo-text">OPC UA<br><small>Exporter</small></span>
-            </div>
-            <ThemeToggle />
-        </div>
-
-        <section class="panel">
-            <h3 class="panel-title">Navigation</h3>
-            <nav class="nav-menu">
-                <NavLink href="/" Match="NavLinkMatch.All" class="btn btn-ghost nav-link">Tag Browser</NavLink>
-                <NavLink href="/connection-settings" class="btn btn-ghost nav-link">Connection Settings</NavLink>
-                <NavLink href="/discover-servers" class="btn btn-ghost nav-link">Discover Servers</NavLink>
-                <NavLink href="/diagnostics" class="btn btn-ghost nav-link">Diagnostics</NavLink>
-            </nav>
-        </section>
-
+    <AppSidebar>
         @if (Opc.PendingCertificates.Any())
         {
             <section class="panel">
@@ -132,8 +106,7 @@
         <div class="status-bar @(Opc.HasError ? "status-error" : "status-ok")">
             @Opc.StatusMessage
         </div>
-        }
-    </aside>
+    </AppSidebar>
 
     <!-- ═══════════════════════ MAIN CONTENT ═══════════════════════ -->
     <main class="content">
@@ -530,7 +503,6 @@
     private bool _chartJsInitialized;
     private bool _chartDirty;
     private bool _legendCollapsed;
-    private bool _sidebarCollapsed;
     private int _trendWindowSeconds = 60;
 
     private string _tagFilter = string.Empty;
