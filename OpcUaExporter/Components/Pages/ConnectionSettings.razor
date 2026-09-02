@@ -46,7 +46,7 @@
                     <input class="field-input" @bind="Opc.Profile.Name" />
 
                     <label class="field-label">Endpoint URL</label>
-                    <input class="field-input" @bind="Opc.Profile.EndpointUrl" placeholder="opc.tcp://192.168.1.10:4840" />
+                    <input class="field-input" @bind="Opc.Profile.EndpointUrl" @bind:event="oninput" @bind:after="RefreshWarnings" placeholder="opc.tcp://192.168.1.10:4840" />
                 </section>
 
                 <section class="panel settings-panel">
@@ -61,7 +61,7 @@
                     </select>
 
                     <label class="field-label">Security Policy</label>
-                    <select class="field-input" @bind="Opc.Profile.SecurityPolicy">
+                    <select class="field-input" @bind="Opc.Profile.SecurityPolicy" @bind:after="RefreshWarnings">
                         @foreach (var policy in Opc.SecurityPolicyOptions)
                         {
                             <option value="@policy">@PolicyDisplay(policy)</option>
@@ -73,7 +73,7 @@
                     <h3 class="panel-title">Authentication</h3>
 
                     <label class="field-label">Authentication Type</label>
-                    <select class="field-input" @bind="Opc.Profile.AuthenticationType">
+                    <select class="field-input" @bind="Opc.Profile.AuthenticationType" @bind:after="RefreshWarnings">
                         @foreach (var type in Opc.AuthenticationOptions)
                         {
                             <option value="@type">@type</option>
@@ -83,10 +83,10 @@
                     @if (Opc.Profile.AuthenticationType == AuthenticationType.UsernamePassword)
                     {
                         <label class="field-label">Username</label>
-                        <input class="field-input" @bind="Opc.Profile.Username" autocomplete="username" />
+                        <input class="field-input" @bind="Opc.Profile.Username" @bind:event="oninput" @bind:after="RefreshWarnings" autocomplete="username" />
 
                         <label class="field-label">Password</label>
-                        <input class="field-input" type="password" @bind="Opc.Profile.Password" autocomplete="current-password" />
+                        <input class="field-input" type="password" @bind="Opc.Profile.Password" @bind:event="oninput" @bind:after="RefreshWarnings" autocomplete="current-password" />
                     }
                 </section>
 
