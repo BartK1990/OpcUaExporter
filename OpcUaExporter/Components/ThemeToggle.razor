@@ -1,0 +1,52 @@
+@inject ThemeService ThemeSvc
+@inject IJSRuntime JS
+@implements IDisposable
+
+<button type="button" class="btn btn-ghost icon-btn theme-toggle"
+        title="@(ThemeSvc.Theme == AppTheme.Dark ? "Switch to light theme" : "Switch to dark theme")"
+        @onclick="ToggleTheme">
+    @(ThemeSvc.Theme == AppTheme.Dark ? "☀️" : "🌙")
+</button>
+
+@code {
+    protected override void OnInitialized()
+    {
+        ThemeSvc.ThemeChanged += OnThemeChanged;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender)
+            return;
+
+        await ApplyTheme();
+    }
+
+    private async Task ToggleTheme()
+    {
+        ThemeSvc.Toggle();
+        await ApplyTheme();
+    }
+
+    private async Task ApplyTheme()
+    {
+        try
+        {
+            await JS.InvokeVoidAsync("setTheme", ThemeSvc.Theme == AppTheme.Light ? "light" : "dark");
+        }
+        catch
+        {
+            // JS interop not available in some preview modes – ignore
+        }
+    }
+
+    private void OnThemeChanged()
+    {
+        _ = InvokeAsync(StateHasChanged);
+    }
+
+    public void Dispose()
+    {
+        ThemeSvc.ThemeChanged -= OnThemeChanged;
+    }
+}

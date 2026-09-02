@@ -28,6 +28,10 @@
         window.showConfirm = async function (message) {
             return await DotNet.invokeMethodAsync('OpcUaExporter', 'ConfirmAsync', message);
         };
+
+        window.setTheme = function (theme) {
+            document.documentElement.setAttribute('data-theme', theme);
+        };
     </script>
 </body>
 </html>

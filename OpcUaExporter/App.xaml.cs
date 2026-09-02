@@ -31,6 +31,7 @@ public partial class App : Application
         serviceCollection.AddSingleton<DiagnosticsLogService>();
         serviceCollection.AddSingleton<OpcUaClientService>();
         serviceCollection.AddSingleton<OpcUaService>();
+        serviceCollection.AddSingleton<ThemeService>();
 
         Services = serviceCollection.BuildServiceProvider();
 
