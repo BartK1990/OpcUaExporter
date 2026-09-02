@@ -1,30 +1,28 @@
 # OPC UA Exporter
 
-A Windows desktop application built with **Blazor Hybrid (WinForms)** that connects to OPC UA servers, browses their tag trees, reads live values, and exports selected tags to CSV or JSON.
+A Windows desktop application built with **Blazor Hybrid (WPF)** that connects to OPC UA servers, browses their tag trees, reads/writes/subscribes to live values, and exports selected tags to CSV or JSON.
 
-OPC UA communication is handled by an **embedded Python runtime** using the free [`opcua`](https://github.com/FreeOpcUa/python-opcua) (python-opcua) library, called from .NET as a child process.
+OPC UA communication is handled natively from .NET using the [OPC Foundation's UA-.NETStandard](https://github.com/OPCFoundation/UA-.NETStandard) client SDK — no external runtime or subprocess is involved.
 
 ---
 
 ## Architecture
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  WPF Host (MainWindow.xaml)                              │
-│  ┌────────────────────────────────────────────────────┐  │
-│  │  BlazorWebView                                     │  │
-│  │  ┌──────────────────────────────────────────────┐  │  │
-│  │  │  Blazor Components  (Index.razor, TagNode)   │  │  │
-│  │  │           ↕ DI                               │  │  │
-│  │  │  OpcUaService  ──►  PythonBridgeService      │  │  │
-│  │  └──────────────────────────────────────────────┘  │  │
-│  └────────────────────────────────────────────────────┘  │
-│                          │ Process.Start()               │
-│                          ▼                               │
-│          Python\runtime\python.exe                       │
-│          Python\opc_ua_bridge.py  ──► OPC UA Server     │
-│              (python-opcua library)                      │
-└──────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│  WPF Host (MainWindow.xaml)                                  │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │  BlazorWebView                                        │    │
+│  │  ┌────────────────────────────────────────────────┐  │    │
+│  │  │  Blazor Components (Index.razor, TagNode, ...)  │  │    │
+│  │  │           ↕ DI                                  │  │    │
+│  │  │  OpcUaService  ──►  OpcUaClientService          │  │    │
+│  │  └────────────────────────────────────────────────┘  │    │
+│  └──────────────────────────────────────────────────────┘    │
+└───────────────────────────┬────────────────────────────────-─┘
+                             │ Opc.Ua.Client (OPCFoundation SDK)
+                             ▼
+                      OPC UA Server (network)
 ```
 
 ### Key design decisions
@@ -33,9 +31,10 @@ OPC UA communication is handled by an **embedded Python runtime** using the free
 |---|---|---|
 | UI host | WPF + BlazorWebView | Blazor Hybrid on Windows, native file dialogs, XAML layout |
 | UI components | Razor + CSS | Modern reactive UI, no WinForms designer lock-in |
-| OPC UA | python-opcua (free) | Mature, free OPC UA client; no licence cost |
-| Python runtime | Embedded CPython 3.11 | Self-contained; no system Python required |
-| .NET → Python | `System.Diagnostics.Process` | Simple, robust; JSON over stdout/stderr |
+| OPC UA client | OPCFoundation.NetStandard.Opc.Ua(.Client/.Configuration) | Official, actively maintained .NET OPC UA SDK — no subprocess, no external runtime to bundle |
+| State | `OpcUaService` singleton | Central façade Blazor components bind to; raises a `StateChanged` event for re-render |
+
+`OpcUaClientService` owns the OPC UA session lifecycle directly: building the client `ApplicationConfiguration` (including its own application certificate), endpoint discovery and selection by security mode/policy, browsing, reading, writing, and subscriptions — all via `Opc.Ua.Client` types (`Session`, `Subscription`, `MonitoredItem`, `DiscoveryClient`).
 
 ---
 
@@ -43,26 +42,8 @@ OPC UA communication is handled by an **embedded Python runtime** using the free
 
 - **Windows 10/11**
 - **.NET 8 SDK** (https://dotnet.microsoft.com/download)
-- **PowerShell 5+** (included in Windows)
-- Internet access for the one-time setup
 
----
-
-## One-time setup — Embedded Python Runtime
-
-Run the bootstrap script **once** from the solution root:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File setup_python_runtime.ps1
-```
-
-This script:
-1. Downloads **Python 3.11 embeddable zip** (≈ 10 MB) from python.org
-2. Extracts it to `OpcUaExporter\Python\runtime\`
-3. Patches `python311._pth` to enable `site-packages`
-4. Installs `pip` and then `opcua` into the runtime
-
-After this step, `Python\runtime\python.exe` is fully self-contained — no system Python is used at runtime.
+No other setup is required — the OPC UA client library is a standard NuGet dependency restored on build.
 
 ---
 
@@ -80,12 +61,15 @@ Or open `OpcUaExporter.sln` in **Visual Studio 2022** and press **F5**.
 
 ## Usage
 
-1. **Enter the server endpoint URL** (e.g. `opc.tcp://192.168.1.10:4840`)
-2. Click **Browse Tags** — the address space tree loads in the right panel
-3. **Check** the tags you want (or use All / None shortcuts)
-4. Click **Read Values** to fetch live values into the table at the bottom
-5. Choose a **format** (CSV or JSON), enter or browse for an **output path**
-6. Click **Export Selected**
+1. **Enter the server endpoint URL** (e.g. `opc.tcp://192.168.1.10:4840`) on the Tag Browser sidebar, or use **Discover Servers** to scan a host's ports for OPC UA endpoints.
+2. Configure security mode/policy and authentication (anonymous or username/password) under **Connection Settings**, and save the profile for reuse.
+3. Click **Browse Tags** — the address space tree loads in the tag browser (top-level structure appears first, then the tree fills in as the deep scan continues; scanning can run in parallel — see `ConnectionProfile.EnableParallelBrowse`).
+4. **Check** the tags you want (or use All / None / per-folder shortcuts).
+5. Click **Read Values** for a one-off read, or **Subscribe** to get live updates pushed into the readings table.
+6. With a live subscription active, optionally **record** updates to a CSV file and/or plot selected tags on the **live trend chart**.
+7. Choose a **format** (CSV or JSON), enter or browse for an **output path**, and click **Export Selected**.
+8. If the server presents an untrusted certificate, it appears in the sidebar for you to **Trust** or **Reject** before retrying the connection.
+9. Check the **Diagnostics** page for a running log of connection/browse/read/subscribe activity.
 
 ---
 
@@ -93,80 +77,65 @@ Or open `OpcUaExporter.sln` in **Visual Studio 2022** and press **F5**.
 
 ```
 OpcUaExporter.sln
-setup_python_runtime.ps1        ← one-time bootstrap
 OpcUaExporter/
 ├── OpcUaExporter.csproj
 ├── App.xaml                    ← WPF Application definition (no StartupUri)
-├── App.xaml.cs                 ← DI container setup + OnStartup
-├── MainWindow.xaml             ← WPF Window hosting BlazorWebView
-├── MainWindow.xaml.cs          ← JS-invokable SaveFileDialog (Microsoft.Win32)
+├── App.xaml.cs                 ← DI container setup + OnStartup + global crash logging
+├── MainWindow.xaml              ← WPF Window hosting BlazorWebView
+├── MainWindow.xaml.cs           ← JS-invokable native dialogs (Microsoft.Win32)
 │
 ├── Models/
-│   └── OpcModels.cs            ← OpcTag, TagReading, ConnectionProfile, ExportOptions
+│   └── OpcModels.cs             ← OpcTag, TagReading, ConnectionProfile, NodeDetails,
+│                                   ServerCapabilitiesInfo, DiscoveredServerInfo, ExportOptions, ...
 │
 ├── Services/
-│   ├── PythonBridgeService.cs  ← launches python.exe, parses JSON output
-│   └── OpcUaService.cs         ← high-level state management for Blazor
+│   ├── OpcUaClientService.cs    ← native OPC UA client: sessions, browse, read/write,
+│   │                               subscriptions, endpoint/security discovery, port scanning,
+│   │                               certificate trust handling
+│   ├── OpcUaService.cs          ← high-level state management for Blazor (façade over
+│   │                               OpcUaClientService), recording, trend chart wiring
+│   ├── DiagnosticsLogService.cs ← bounded in-memory diagnostic log
+│   └── ThemeService.cs          ← light/dark theme, persisted to app-settings.json
 │
 ├── Components/
 │   ├── App.razor
 │   ├── _Imports.razor
-│   ├── TagNode.razor           ← recursive tag tree component
+│   ├── TagNode.razor            ← recursive tag tree component
+│   ├── ThemeToggle.razor
 │   └── Pages/
-│       └── Index.razor         ← main page (sidebar + content)
-│
-├── Python/
-│   ├── opc_ua_bridge.py        ← Python OPC UA script (browse / read / export)
-│   └── runtime/                ← embedded CPython (created by setup script)
+│       ├── Index.razor          ← main page (sidebar + tag tree + readings + export)
+│       ├── ConnectionSettings.razor
+│       ├── ServerDiscovery.razor← host/port scanning UI
+│       └── Diagnostics.razor
 │
 └── wwwroot/
     ├── index.html
-    └── css/
-        └── app.css
+    ├── app.ico
+    ├── css/
+    │   └── app.css
+    └── js/
+        ├── resizable-panes.js   ← drag-resize layout panes
+        ├── resizable-columns.js ← drag-resize table columns
+        └── trend-chart.js       ← live trend chart rendering
 ```
 
 ---
 
-## Python Bridge Protocol
+## Security & Certificates
 
-The bridge is invoked as a subprocess:
+`OpcUaClientService` maintains its own PKI store under `%LocalAppData%\OpcUaExporter\pki\` (`own`, `trusted`, `issuer`, `rejected` directories) and generates a client application certificate on first run. Untrusted server certificates are **not** auto-accepted or auto-rejected — they are surfaced in the UI so you can review and trust/reject them explicitly, after which the connection can be retried.
 
-```
-python.exe opc_ua_bridge.py <command> [args...]
-```
-
-| Command | Args | Stdout |
-|---|---|---|
-| `browse` | `<endpoint_url>` | `{"ok": true, "tags": [...]}` |
-| `read` | `<endpoint_url>` `<node_ids_json>` | `{"ok": true, "rows": [...]}` |
-| `export` | `<endpoint_url>` `<node_ids_json>` `<path>` | `{"ok": true, "exported": N, "path": "..."}` |
-
-Errors are returned as `{"error": "...", "trace": "..."}` on stderr with exit code 1.
+Supported authentication: Anonymous and Username/Password. Security mode/policy (None, Sign, SignAndEncrypt with the standard OPC UA security policies) can be selected per connection profile, or discovered from the server via **Connection Settings → Discover Modes**.
 
 ---
 
-## Customisation
+## Publishing
 
-### Security / Authentication
-Edit `opc_ua_bridge.py` → `connect()` to add username/password or certificate auth:
-
-```python
-def connect(endpoint_url: str) -> Client:
-    client = Client(endpoint_url)
-    client.set_user("admin")
-    client.set_password("secret")
-    client.connect()
-    return client
-```
-
-### Subscriptions / Live monitoring
-Add a `monitor` command to the Python script using `opcua.Subscription`.
-
-### Publishing
 ```bash
 dotnet publish -c Release -r win-x64 --self-contained true
 ```
-Include the `Python\` folder alongside the published output.
+
+The published output is self-contained — there is no separate runtime folder to copy alongside it.
 
 ---
 
@@ -174,7 +143,8 @@ Include the `Python\` folder alongside the published output.
 
 | Symptom | Fix |
 |---|---|
-| `Embedded Python runtime not found` | Run `setup_python_runtime.ps1` |
-| `opcua library not found` | Run `python.exe -m pip install opcua` inside `Python\runtime\` |
 | Blank WebView / `blazor.webview.js` 404 | Ensure `Microsoft.AspNetCore.Components.WebView.Wpf` NuGet is installed |
-| Connection timeout | Check firewall, confirm OPC UA server is running and port is open |
+| Connection timeout | Check firewall, confirm OPC UA server is running and the port is open |
+| `No endpoint matches SecurityMode=... and SecurityPolicy=...` | Use **Discover Modes** on the Connection Settings page to see the security options the server actually offers, then match your profile to one of them |
+| Certificate errors on connect | Check the **Server Certificates** panel on the Tag Browser sidebar for a pending certificate to trust/reject |
+| `Client application certificate key size is ...` on startup | Delete `%LocalAppData%\OpcUaExporter\pki\own` and restart the app to regenerate a stronger certificate |
