@@ -56,6 +56,19 @@
 
     function axisOf(s) { return s.axis === 'right' ? 'right' : 'left'; }
 
+    // Grid/label colors follow the current light/dark theme (set via CSS custom
+    // properties on <html>) rather than being hardcoded, so the chart stays
+    // legible when the user switches theme.
+    function themeColors() {
+        var cs = getComputedStyle(document.documentElement);
+        var grid = cs.getPropertyValue('--chart-grid').trim();
+        var label = cs.getPropertyValue('--chart-label').trim();
+        return {
+            grid: grid || 'rgba(255,255,255,0.06)',
+            label: label || 'rgba(255,255,255,0.45)'
+        };
+    }
+
     function draw() {
         var ctx = state.ctx;
         if (!ctx || !state.canvas) return;
@@ -63,6 +76,7 @@
         var dpr = window.devicePixelRatio || 1;
         var w = state.canvas.width;
         var h = state.canvas.height;
+        var colors = themeColors();
 
         ctx.save();
         ctx.clearRect(0, 0, w, h);
@@ -144,7 +158,7 @@
         var anyPoints = !!leftRange || !!rightRange;
 
         // grid
-        ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+        ctx.strokeStyle = colors.grid;
         ctx.lineWidth = 1;
         for (var i = 0; i <= 4; i++) {
             var gy = padT + (plotH * i / 4);
@@ -155,7 +169,7 @@
         }
 
         if (!anyPoints) {
-            ctx.fillStyle = 'rgba(255,255,255,0.35)';
+            ctx.fillStyle = colors.label;
             ctx.font = (12 * dpr) + 'px sans-serif';
             ctx.fillText('Waiting for live data…', padL + 8 * dpr, padT + 20 * dpr);
             ctx.restore();
@@ -173,13 +187,13 @@
         ctx.font = (10 * dpr) + 'px monospace';
         ctx.textBaseline = 'middle';
         if (leftRange) {
-            ctx.fillStyle = 'rgba(255,255,255,0.45)';
+            ctx.fillStyle = colors.label;
             ctx.textAlign = 'left';
             ctx.fillText(leftRange.max.toFixed(2), 4 * dpr, padT);
             ctx.fillText(leftRange.min.toFixed(2), 4 * dpr, padT + plotH);
         }
         if (rightRange) {
-            ctx.fillStyle = 'rgba(255,255,255,0.45)';
+            ctx.fillStyle = colors.label;
             ctx.textAlign = 'right';
             ctx.fillText(rightRange.max.toFixed(2), w - 4 * dpr, padT);
             ctx.fillText(rightRange.min.toFixed(2), w - 4 * dpr, padT + plotH);
@@ -187,13 +201,13 @@
 
         // x-axis timestamp ticks
         var tickCount = 5;
-        ctx.fillStyle = 'rgba(255,255,255,0.45)';
+        ctx.fillStyle = colors.label;
         ctx.font = (10 * dpr) + 'px monospace';
         ctx.textBaseline = 'top';
         for (var ti = 0; ti < tickCount; ti++) {
             var frac = ti / (tickCount - 1);
             var tx = padL + plotW * frac;
-            ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+            ctx.strokeStyle = colors.grid;
             ctx.beginPath();
             ctx.moveTo(tx, padT);
             ctx.lineTo(tx, padT + plotH);
@@ -304,6 +318,11 @@
             scheduleDraw();
         },
 
-        resize: resizeCanvas
+        resize: resizeCanvas,
+
+        // Re-reads theme colors and redraws immediately (called when the
+        // light/dark theme is toggled) so a visible chart doesn't wait for
+        // the next data point to pick up the new palette.
+        themeChanged: scheduleDraw
     };
 })();
