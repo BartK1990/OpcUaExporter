@@ -665,6 +665,17 @@ body.row-resizing * {
     font-family: var(--font-mono);
 }
 
+.compact-toggle {
+    margin-left: auto;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
+.compact-toggle.active {
+    color: var(--amber);
+    border-color: var(--amber-dim);
+}
+
 /* ── Empty state ────────────────────────────────────────── */
 .empty-state {
     display: flex;
@@ -907,6 +918,35 @@ body.row-resizing * {
     padding: 4px 2px;
     text-align: center;
     overflow: visible;
+}
+
+/* ── Compact row height (Selected Tags) ────────────────────── */
+.selected-table-wrapper.compact .data-table td {
+    padding: 2px 14px;
+    font-size: 11.5px;
+}
+
+.selected-table-wrapper.compact .data-table td.col-fixed-icon {
+    padding: 1px 2px;
+}
+
+.selected-table-wrapper.compact .icon-btn {
+    padding: 2px 4px;
+    font-size: 11px;
+}
+
+.selected-table-wrapper.compact .subscribed-dot {
+    width: 6px;
+    height: 6px;
+}
+
+.selected-table-wrapper.compact .tag-check {
+    width: 12px;
+    height: 12px;
+}
+
+.selected-table-wrapper.compact .write-input {
+    padding: 1px 5px;
 }
 
 .resizable-th {

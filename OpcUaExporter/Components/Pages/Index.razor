@@ -4,6 +4,7 @@
 @inject OpcUaService Opc
 @inject IJSRuntime JS
 @inject DiagnosticsLogService Diagnostics
+@inject ThemeService ThemeSvc
 @implements IDisposable
 
 <div class="app-shell">
@@ -204,6 +205,11 @@
                     <div class="content-header">
                         <h2>Selected Tags</h2>
                         <span class="badge">@SelectedCount tag(s)</span>
+                        <button class="btn btn-ghost compact-toggle @(ThemeSvc.CompactSelectedRows ? "active" : "")"
+                                title="@(ThemeSvc.CompactSelectedRows ? "Switch to normal row height" : "Switch to compact row height")"
+                                @onclick="() => ThemeSvc.SetCompactSelectedRows(!ThemeSvc.CompactSelectedRows)">
+                            ☰ Compact
+                        </button>
                     </div>
 
                     <div class="btn-row selected-actions">
@@ -260,7 +266,7 @@
                     }
                     else
                     {
-                        <div class="table-wrapper selected-table-wrapper">
+                        <div class="table-wrapper selected-table-wrapper @(ThemeSvc.CompactSelectedRows ? "compact" : "")">
                             <table class="data-table resizable-table">
                                 <colgroup>
                                     <col style="width:36px;" />
@@ -660,6 +666,7 @@
     {
         Opc.StateChanged += OnServiceStateChanged;
         Opc.TrendUpdate += OnTrendUpdate;
+        ThemeSvc.CompactSelectedRowsChanged += OnServiceStateChanged;
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -1108,5 +1115,6 @@
     {
         Opc.StateChanged -= OnServiceStateChanged;
         Opc.TrendUpdate -= OnTrendUpdate;
+        ThemeSvc.CompactSelectedRowsChanged -= OnServiceStateChanged;
     }
 }
