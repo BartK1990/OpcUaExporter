@@ -287,20 +287,68 @@ public class OpcUaService
         });
     }
 
+    /// <summary>Marks every selected tag as enabled for subscription and (re)subscribes to all of them.</summary>
     public async Task SubscribeSelectedAsync(CancellationToken ct = default)
     {
-        var selected = GetSelectedNodeIds();
-        if (!selected.Any())
+        var selectedTags = GetSelectedTags();
+        if (!selectedTags.Any())
         {
             SetStatus("No tags selected.", isError: true);
             return;
         }
+
+        foreach (var tag in selectedTags)
+            tag.IsSubscribeEnabled = true;
+
+        var selected = selectedTags.Select(t => t.NodeId).ToList();
 
         await RunSafe(async () =>
         {
             await SubscribeToAsync(selected, ct);
             SetStatus($"Subscribed to {selected.Count} tag(s). Listening for updates…");
         });
+    }
+
+    /// <summary>Toggles whether a tag is included in the subscription, immediately starting/updating/stopping the live subscription to match.</summary>
+    public async Task ToggleTagSubscribeAsync(OpcTag tag, CancellationToken ct = default)
+    {
+        if (!tag.IsSelectable)
+            return;
+
+        tag.IsSubscribeEnabled = !tag.IsSubscribeEnabled;
+
+        await RunSafe(async () =>
+        {
+            var desired = GetSubscribeEnabledNodeIds();
+            if (desired.Count == 0)
+            {
+                if (IsSubscribed)
+                {
+                    await StopActiveSubscriptionHandleAsync();
+                    SetStatus("Subscription stopped (no tags enabled for subscription).");
+                }
+                return;
+            }
+
+            var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
+            if (!IsSubscribed || !desiredSet.SetEquals(_subscribedNodeIds))
+            {
+                await SubscribeToAsync(desired, ct);
+                SetStatus($"Subscribed to {desired.Count} tag(s). Listening for updates…");
+            }
+        });
+    }
+
+    /// <summary>Deselects every tag and stops any active subscription (and the recording/trend that ride on it).</summary>
+    public async Task ClearSelectionAsync()
+    {
+        foreach (var tag in GetSelectedTags())
+            tag.IsSubscribeEnabled = false;
+
+        SelectAll(false);
+
+        if (IsSubscribed)
+            await StopSubscriptionAsync();
     }
 
     public async Task StopSubscriptionAsync()
@@ -739,6 +787,13 @@ public class OpcUaService
     public List<OpcTag> GetSelectedTags()
         => FlattenAll(TagTree)
            .Where(t => t.IsSelectable && t.IsSelected)
+           .ToList();
+
+    /// <summary>Node IDs of selected tags that are also marked for subscription (see <see cref="OpcTag.IsSubscribeEnabled"/>).</summary>
+    public List<string> GetSubscribeEnabledNodeIds()
+        => FlattenAll(TagTree)
+           .Where(t => t.IsSelectable && t.IsSelected && t.IsSubscribeEnabled)
+           .Select(t => t.NodeId)
            .ToList();
 
     // -----------------------------------------------------------------------
