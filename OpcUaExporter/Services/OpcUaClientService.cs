@@ -200,7 +200,7 @@ public class OpcUaClientService
 
                 var node = await session.ReadNodeAsync(NodeId.Parse(id), ct);
                 row.DisplayName = node?.DisplayName?.Text ?? id;
-                row.DataType = await TryGetDataTypeName(node, session);
+                row.DataType = RefineDataTypeFromValue(await TryGetDataTypeName(node, session), row.Value);
             }
             catch (Exception ex)
             {
@@ -293,6 +293,20 @@ public class OpcUaClientService
             BuiltInType.String   => rawValue,
             _                    => rawValue
         };
+    }
+
+    /// <summary>
+    /// Some servers declare a Variable's DataType attribute as the abstract BaseDataType
+    /// (shown as "Variant"), letting the node hold any concrete type at runtime. In that
+    /// case the static DataType attribute alone can't tell us the real type, so this
+    /// refines it using the .NET type of the actual value most recently read.
+    /// </summary>
+    private static string? RefineDataTypeFromValue(string? dataTypeName, object? value)
+    {
+        if (value is DateTime && (dataTypeName is null || string.Equals(dataTypeName, nameof(BuiltInType.Variant), StringComparison.OrdinalIgnoreCase)))
+            return nameof(BuiltInType.DateTime);
+
+        return dataTypeName;
     }
 
     public async Task TestConnectionAsync(ConnectionProfile profile, CancellationToken ct = default)
@@ -1348,7 +1362,7 @@ public class OpcUaClientService
 
                 var node = await session.ReadNodeAsync(nodeId, ct);
                 row.DisplayName = node?.DisplayName?.Text ?? id;
-                row.DataType = await TryGetDataTypeName(node, session);
+                row.DataType = RefineDataTypeFromValue(await TryGetDataTypeName(node, session), row.Value);
             }
             catch (Exception ex)
             {

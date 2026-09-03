@@ -617,6 +617,16 @@ body.row-resizing * {
     width: 170px;
 }
 
+.write-type-select {
+    width: 92px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+    padding: 3px 4px;
+}
+
 .write-dialog-nodeid {
     color: var(--text-muted);
     font-size: 11px;
@@ -960,6 +970,10 @@ body.row-resizing * {
 
 .selected-table-wrapper.compact .write-input {
     padding: 1px 5px;
+}
+
+.selected-table-wrapper.compact .write-type-select {
+    padding: 1px 3px;
 }
 
 .resizable-th {

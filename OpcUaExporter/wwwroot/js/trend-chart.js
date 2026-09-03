@@ -296,8 +296,15 @@
         },
 
         addPoint: function (nodeId, timestampMs, value) {
+            // A point can arrive (e.g. the initial seed value for a newly-trended tag)
+            // before Blazor's next render has called setSeries to register it — create
+            // a placeholder series rather than dropping the point; setSeries will fill
+            // in the real label/axis (and adopt these points) once it runs.
             var s = state.series[nodeId];
-            if (!s) return;
+            if (!s) {
+                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left' };
+                if (state.order.indexOf(nodeId) < 0) state.order.push(nodeId);
+            }
 
             s.points.push({ t: timestampMs, v: value });
 

@@ -457,10 +457,21 @@ public class OpcUaService
 
             foreach (var id in selected)
             {
-                if (!_trendedNodeIds.Contains(id, StringComparer.OrdinalIgnoreCase))
+                var isNew = !_trendedNodeIds.Contains(id, StringComparer.OrdinalIgnoreCase);
+                if (isNew)
                     _trendedNodeIds.Add(id);
                 if (!_trendAxisByNodeId.ContainsKey(id))
                     _trendAxisByNodeId[id] = "left";
+
+                // A tag whose value stays constant may never fire another subscription
+                // notification once it's already subscribed, so the chart would otherwise
+                // never receive a single point for it. Seed it with the current reading.
+                if (isNew)
+                {
+                    var reading = LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, id, StringComparison.OrdinalIgnoreCase));
+                    if (reading is not null)
+                        TrendUpdate?.Invoke(reading);
+                }
             }
 
             IsChartVisible = true;
@@ -487,10 +498,21 @@ public class OpcUaService
                 await SubscribeToAsync(union, ct);
             }
 
-            if (!_trendedNodeIds.Contains(nodeId, StringComparer.OrdinalIgnoreCase))
+            var isNew = !_trendedNodeIds.Contains(nodeId, StringComparer.OrdinalIgnoreCase);
+            if (isNew)
                 _trendedNodeIds.Add(nodeId);
             if (!_trendAxisByNodeId.ContainsKey(nodeId))
                 _trendAxisByNodeId[nodeId] = "left";
+
+            // A tag whose value stays constant may never fire another subscription
+            // notification once it's already subscribed, so the chart would otherwise
+            // never receive a single point for it. Seed it with the current reading.
+            if (isNew)
+            {
+                var reading = LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, nodeId, StringComparison.OrdinalIgnoreCase));
+                if (reading is not null)
+                    TrendUpdate?.Invoke(reading);
+            }
 
             IsChartVisible = true;
             SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
@@ -769,16 +791,25 @@ public class OpcUaService
     }
 
     /// <summary>Writes a single value to a node, using its known DataType (if browsed) to convert the raw input.</summary>
-    public async Task<TagReading?> WriteValueAsync(string nodeId, string rawValue, CancellationToken ct = default)
+    /// <param name="dataTypeOverride">Explicit data type to write as, overriding auto-detection. Pass when the user has picked a type manually — some servers declare a node's DataType as the abstract BaseDataType ("Variant"), so the real type can't always be auto-detected.</param>
+    public async Task<TagReading?> WriteValueAsync(string nodeId, string rawValue, string? dataTypeOverride = null, CancellationToken ct = default)
     {
         TagReading? result = null;
 
         await RunSafe(async () =>
         {
             SetStatus($"Writing value to '{nodeId}'…");
-            var dataTypeHint = FlattenAll(TagTree)
-                .FirstOrDefault(t => string.Equals(t.NodeId, nodeId, StringComparison.OrdinalIgnoreCase))
-                ?.DataType;
+
+            // Prefer the last-read reading's DataType over the browsed tag's: a node whose
+            // static DataType attribute is the abstract BaseDataType ("Variant") only reveals
+            // its real type once an actual value has been read/subscribed and refined.
+            var dataTypeHint = dataTypeOverride
+                ?? LastReadings
+                    .FirstOrDefault(r => string.Equals(r.NodeId, nodeId, StringComparison.OrdinalIgnoreCase))
+                    ?.DataType
+                ?? FlattenAll(TagTree)
+                    .FirstOrDefault(t => string.Equals(t.NodeId, nodeId, StringComparison.OrdinalIgnoreCase))
+                    ?.DataType;
 
             result = await _bridge.WriteAsync(Profile, nodeId, rawValue, dataTypeHint, ct);
 
