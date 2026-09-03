@@ -125,6 +125,51 @@
             return pts;
         }
 
+        // Rounds a raw span to a "nice" value: 1, 2, 5 or 10 times a power of ten
+        // (the classic Heckbert nice-numbers algorithm used by most charting
+        // libraries for axis ticks).
+        function niceNum(range, round) {
+            if (!(range > 0) || !isFinite(range)) return 1;
+            var exponent = Math.floor(Math.log10(range));
+            var fraction = range / Math.pow(10, exponent);
+            var niceFraction;
+            if (round) {
+                if (fraction < 1.5) niceFraction = 1;
+                else if (fraction < 3) niceFraction = 2;
+                else if (fraction < 7) niceFraction = 5;
+                else niceFraction = 10;
+            } else {
+                if (fraction <= 1) niceFraction = 1;
+                else if (fraction <= 2) niceFraction = 2;
+                else if (fraction <= 5) niceFraction = 5;
+                else niceFraction = 10;
+            }
+            return niceFraction * Math.pow(10, exponent);
+        }
+
+        // Snaps a data range to nice round boundaries and a round step size, so
+        // labels land on values like 0/5/10 instead of whatever the current
+        // min/max happen to be.
+        function niceScale(min, max, targetTicks) {
+            if (min === max) {
+                min -= 1;
+                max += 1;
+            }
+            var step = niceNum(niceNum(max - min, false) / Math.max(1, targetTicks - 1), true);
+            var niceMin = Math.floor(min / step) * step;
+            var niceMax = Math.ceil(max / step) * step;
+            var ticks = [];
+            for (var v = niceMin; v <= niceMax + step / 2; v += step) {
+                ticks.push(Math.round(v / step) * step);
+            }
+            return { min: niceMin, max: niceMax, step: step, ticks: ticks };
+        }
+
+        function formatTick(v, step) {
+            var decimals = step >= 1 ? 0 : Math.min(6, Math.max(0, Math.ceil(-Math.log10(step))));
+            return v.toFixed(decimals);
+        }
+
         function computeRange(axis) {
             var vMin = Infinity, vMax = -Infinity, any = false;
             state.order.forEach(function (id) {
@@ -137,34 +182,35 @@
                 });
             });
             if (!any) return null;
-            if (vMin === vMax) {
-                vMin -= 1;
-                vMax += 1;
-            } else {
-                var pad = (vMax - vMin) * 0.08;
-                vMin -= pad;
-                vMax += pad;
-            }
-            return { min: vMin, max: vMax };
+            return niceScale(vMin, vMax, 9);
         }
 
         var leftRange = computeRange('left');
         var rightRange = hasRightAxis ? computeRange('right') : null;
         var anyPoints = !!leftRange || !!rightRange;
+        var gridRange = leftRange || rightRange;
 
-        // y-axis grid/label density — more steps means more readable values
-        // along the Y axis instead of just min/max plus a couple in between.
-        var yGridSteps = 9;
-
-        // grid
+        // grid — drawn at the primary axis's nice tick values so gridlines line
+        // up with round numbers instead of an arbitrary even split of the plot.
         ctx.strokeStyle = colors.grid;
         ctx.lineWidth = 1;
-        for (var i = 0; i <= yGridSteps; i++) {
-            var gy = padT + (plotH * i / yGridSteps);
-            ctx.beginPath();
-            ctx.moveTo(padL, gy);
-            ctx.lineTo(padL + plotW, gy);
-            ctx.stroke();
+        if (gridRange) {
+            gridRange.ticks.forEach(function (t) {
+                var gy = padT + plotH - ((t - gridRange.min) / (gridRange.max - gridRange.min)) * plotH;
+                ctx.beginPath();
+                ctx.moveTo(padL, gy);
+                ctx.lineTo(padL + plotW, gy);
+                ctx.stroke();
+            });
+        } else {
+            var yGridSteps = 9;
+            for (var i = 0; i <= yGridSteps; i++) {
+                var gy0 = padT + (plotH * i / yGridSteps);
+                ctx.beginPath();
+                ctx.moveTo(padL, gy0);
+                ctx.lineTo(padL + plotW, gy0);
+                ctx.stroke();
+            }
         }
 
         if (!anyPoints) {
@@ -182,25 +228,23 @@
         var yForLeft = leftRange ? yForRange(leftRange) : null;
         var yForRight = rightRange ? yForRange(rightRange) : null;
 
-        // y-axis labels — one per gridline (not just min/max) so intermediate
-        // values can be read off directly instead of interpolated by eye.
+        // y-axis labels — placed at each axis's own nice tick values so the
+        // numbers shown are always round, even if left/right ticks don't align.
         ctx.font = 'bold ' + (13 * dpr) + 'px monospace';
         ctx.textBaseline = 'middle';
-        for (var gi = 0; gi <= yGridSteps; gi++) {
-            var gFrac = gi / yGridSteps;
-            var gy2 = padT + plotH * gFrac;
-            if (leftRange) {
-                var lv = leftRange.max - (leftRange.max - leftRange.min) * gFrac;
-                ctx.fillStyle = colors.label;
-                ctx.textAlign = 'left';
-                ctx.fillText(lv.toFixed(2), 4 * dpr, gy2);
-            }
-            if (rightRange) {
-                var rv = rightRange.max - (rightRange.max - rightRange.min) * gFrac;
-                ctx.fillStyle = colors.label;
-                ctx.textAlign = 'right';
-                ctx.fillText(rv.toFixed(2), w - 4 * dpr, gy2);
-            }
+        if (leftRange) {
+            ctx.fillStyle = colors.label;
+            ctx.textAlign = 'left';
+            leftRange.ticks.forEach(function (t) {
+                ctx.fillText(formatTick(t, leftRange.step), 4 * dpr, yForLeft(t));
+            });
+        }
+        if (rightRange) {
+            ctx.fillStyle = colors.label;
+            ctx.textAlign = 'right';
+            rightRange.ticks.forEach(function (t) {
+                ctx.fillText(formatTick(t, rightRange.step), w - 4 * dpr, yForRight(t));
+            });
         }
 
         // x-axis timestamp ticks
@@ -296,8 +340,15 @@
         },
 
         addPoint: function (nodeId, timestampMs, value) {
+            // A point can arrive (e.g. the initial seed value for a newly-trended tag)
+            // before Blazor's next render has called setSeries to register it — create
+            // a placeholder series rather than dropping the point; setSeries will fill
+            // in the real label/axis (and adopt these points) once it runs.
             var s = state.series[nodeId];
-            if (!s) return;
+            if (!s) {
+                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left' };
+                if (state.order.indexOf(nodeId) < 0) state.order.push(nodeId);
+            }
 
             s.points.push({ t: timestampMs, v: value });
 

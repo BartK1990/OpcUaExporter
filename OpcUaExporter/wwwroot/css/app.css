@@ -613,11 +613,31 @@ body.row-resizing * {
     padding: 3px 6px;
 }
 
+.write-input-datetime {
+    width: 170px;
+}
+
+.write-type-select {
+    width: 92px;
+    background: var(--bg-2);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text-primary);
+    font-size: 11px;
+    padding: 3px 4px;
+}
+
 .write-dialog-nodeid {
     color: var(--text-muted);
     font-size: 11px;
     word-break: break-all;
     margin-bottom: 8px;
+}
+
+.write-dialog-hint {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: 6px;
 }
 
 .selected-table-wrapper {
@@ -950,6 +970,10 @@ body.row-resizing * {
 
 .selected-table-wrapper.compact .write-input {
     padding: 1px 5px;
+}
+
+.selected-table-wrapper.compact .write-type-select {
+    padding: 1px 3px;
 }
 
 .resizable-th {

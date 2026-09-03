@@ -200,7 +200,7 @@ public class OpcUaClientService
 
                 var node = await session.ReadNodeAsync(NodeId.Parse(id), ct);
                 row.DisplayName = node?.DisplayName?.Text ?? id;
-                row.DataType = await TryGetDataTypeName(node, session);
+                row.DataType = RefineDataTypeFromValue(await TryGetDataTypeName(node, session), row.Value);
             }
             catch (Exception ex)
             {
@@ -293,6 +293,20 @@ public class OpcUaClientService
             BuiltInType.String   => rawValue,
             _                    => rawValue
         };
+    }
+
+    /// <summary>
+    /// Some servers declare a Variable's DataType attribute as the abstract BaseDataType
+    /// (shown as "Variant"), letting the node hold any concrete type at runtime. In that
+    /// case the static DataType attribute alone can't tell us the real type, so this
+    /// refines it using the .NET type of the actual value most recently read.
+    /// </summary>
+    private static string? RefineDataTypeFromValue(string? dataTypeName, object? value)
+    {
+        if (value is DateTime && (dataTypeName is null || string.Equals(dataTypeName, nameof(BuiltInType.Variant), StringComparison.OrdinalIgnoreCase)))
+            return nameof(BuiltInType.DateTime);
+
+        return dataTypeName;
     }
 
     public async Task TestConnectionAsync(ConnectionProfile profile, CancellationToken ct = default)
@@ -1254,11 +1268,7 @@ public class OpcUaClientService
         if (dataTypeId.IsNullNodeId)
             return null;
 
-        var numericTypeId = dataTypeId.IdType == IdType.Numeric && dataTypeId.Identifier is not null
-            ? Convert.ToUInt32(dataTypeId.Identifier)
-            : 0u;
-
-        var builtInType = TypeInfo.GetBuiltInType(numericTypeId);
+        var builtInType = await ResolveBuiltInTypeAsync(dataTypeId, session);
         if (builtInType != BuiltInType.Null)
             return builtInType.ToString();
 
@@ -1271,6 +1281,43 @@ public class OpcUaClientService
         {
             return dataTypeId.ToString();
         }
+    }
+
+    /// <summary>
+    /// Resolves a DataType NodeId to its underlying OPC UA built-in type, walking up the
+    /// "HasSubtype" hierarchy so subtypes (e.g. the standard UtcTime type, which subtypes
+    /// DateTime, or a vendor-specific alias) are still recognized as their base built-in type.
+    /// Also guards against misreading a numeric identifier from a non-zero namespace as a
+    /// standard type id (only namespace 0 numeric ids map directly to a BuiltInType).
+    /// </summary>
+    private static async Task<BuiltInType> ResolveBuiltInTypeAsync(NodeId dataTypeId, Session session)
+    {
+        var currentId = dataTypeId;
+
+        for (var depth = 0; depth < 10 && currentId is not null && !currentId.IsNullNodeId; depth++)
+        {
+            var builtInType = TypeInfo.GetBuiltInType(currentId);
+            if (builtInType != BuiltInType.Null)
+                return builtInType;
+
+            try
+            {
+                var references = await session.FetchReferencesAsync(currentId);
+                var superTypeRef = references.FirstOrDefault(r =>
+                    !r.IsForward && r.ReferenceTypeId == ReferenceTypeIds.HasSubtype);
+
+                if (superTypeRef is null)
+                    break;
+
+                currentId = ExpandedNodeId.ToNodeId(superTypeRef.NodeId, session.NamespaceUris);
+            }
+            catch
+            {
+                break;
+            }
+        }
+
+        return BuiltInType.Null;
     }
 
     private static int CountVariables(IEnumerable<OpcTag> tags)
@@ -1315,7 +1362,7 @@ public class OpcUaClientService
 
                 var node = await session.ReadNodeAsync(nodeId, ct);
                 row.DisplayName = node?.DisplayName?.Text ?? id;
-                row.DataType = await TryGetDataTypeName(node, session);
+                row.DataType = RefineDataTypeFromValue(await TryGetDataTypeName(node, session), row.Value);
             }
             catch (Exception ex)
             {
