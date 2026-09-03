@@ -13,7 +13,8 @@
         series: {},          // nodeId -> { points: [{t,v}], label, axis }
         windowMs: DEFAULT_WINDOW_MS,
         resizeObserver: null,
-        rafScheduled: false
+        rafScheduled: false,
+        tickInterval: null
     };
 
     function colorFor(nodeId) {
@@ -81,18 +82,12 @@
         ctx.save();
         ctx.clearRect(0, 0, w, h);
 
-        // Anchor the visible window to the newest data point actually received rather than
-        // an independently-computed wall-clock "now" — keeps the chart correct even if the
-        // .NET host clock and the WebView2 JS clock ever drift apart.
-        var latestT = -Infinity;
-        state.order.forEach(function (id) {
-            var s = state.series[id];
-            if (!s) return;
-            s.points.forEach(function (p) {
-                if (p.t > latestT) latestT = p.t;
-            });
-        });
-        var now = latestT === -Infinity ? Date.now() : latestT;
+        // Use real wall-clock time as the right edge of the window so the chart keeps
+        // scrolling forward even when a tag hasn't produced a new value recently — the
+        // last known value is then held flat out to "now" (see effectivePoints below).
+        // The .NET host and the WebView2 JS runtime share the same OS clock, so there's
+        // no meaningful drift to guard against here.
+        var now = Date.now();
         var tMin = now - state.windowMs;
         var tMax = now;
 
@@ -183,24 +178,30 @@
         var yForLeft = leftRange ? yForRange(leftRange) : null;
         var yForRight = rightRange ? yForRange(rightRange) : null;
 
-        // y-axis labels
+        // y-axis labels — one per gridline (not just min/max) so intermediate
+        // values can be read off directly instead of interpolated by eye.
+        var yGridSteps = 4;
         ctx.font = (10 * dpr) + 'px monospace';
         ctx.textBaseline = 'middle';
-        if (leftRange) {
-            ctx.fillStyle = colors.label;
-            ctx.textAlign = 'left';
-            ctx.fillText(leftRange.max.toFixed(2), 4 * dpr, padT);
-            ctx.fillText(leftRange.min.toFixed(2), 4 * dpr, padT + plotH);
-        }
-        if (rightRange) {
-            ctx.fillStyle = colors.label;
-            ctx.textAlign = 'right';
-            ctx.fillText(rightRange.max.toFixed(2), w - 4 * dpr, padT);
-            ctx.fillText(rightRange.min.toFixed(2), w - 4 * dpr, padT + plotH);
+        for (var gi = 0; gi <= yGridSteps; gi++) {
+            var gFrac = gi / yGridSteps;
+            var gy2 = padT + plotH * gFrac;
+            if (leftRange) {
+                var lv = leftRange.max - (leftRange.max - leftRange.min) * gFrac;
+                ctx.fillStyle = colors.label;
+                ctx.textAlign = 'left';
+                ctx.fillText(lv.toFixed(2), 4 * dpr, gy2);
+            }
+            if (rightRange) {
+                var rv = rightRange.max - (rightRange.max - rightRange.min) * gFrac;
+                ctx.fillStyle = colors.label;
+                ctx.textAlign = 'right';
+                ctx.fillText(rv.toFixed(2), w - 4 * dpr, gy2);
+            }
         }
 
         // x-axis timestamp ticks
-        var tickCount = 5;
+        var tickCount = 7;
         ctx.fillStyle = colors.label;
         ctx.font = (10 * dpr) + 'px monospace';
         ctx.textBaseline = 'top';
@@ -262,6 +263,15 @@
                 state.resizeObserver = new ResizeObserver(resizeCanvas);
                 state.resizeObserver.observe(state.wrap);
             }
+
+            // Redraw once a second even when no new point arrives, so the chart keeps
+            // scrolling forward in real time and holds each series at its last known
+            // value instead of freezing at the moment of the last update.
+            if (state.tickInterval) {
+                clearInterval(state.tickInterval);
+            }
+            state.tickInterval = setInterval(scheduleDraw, 1000);
+
             resizeCanvas();
         },
 

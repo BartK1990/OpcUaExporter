@@ -15,6 +15,7 @@ public class OpcUaService
 {
     private readonly OpcUaClientService _bridge;
     private readonly ILogger<OpcUaService> _logger;
+    private readonly DiagnosticsLogService _diagnostics;
     private CancellationTokenSource? _browseCancellation;
     private CancellationTokenSource? _scanCancellation;
     private readonly object _subscriptionSync = new();
@@ -88,10 +89,11 @@ public class OpcUaService
     public int ScanTotalCount { get; private set; }
     public List<DiscoveredServerInfo> DiscoveredServers { get; private set; } = new();
 
-    public OpcUaService(OpcUaClientService bridge, ILogger<OpcUaService> logger)
+    public OpcUaService(OpcUaClientService bridge, ILogger<OpcUaService> logger, DiagnosticsLogService diagnostics)
     {
         _bridge = bridge;
         _logger = logger;
+        _diagnostics = diagnostics;
     }
 
     private static string LastProfilePointerPath
@@ -304,8 +306,10 @@ public class OpcUaService
 
         await RunSafe(async () =>
         {
-            await SubscribeToAsync(selected, ct);
-            SetStatus($"Subscribed to {selected.Count} tag(s). Listening for updates…");
+            var recordingStopped = await SubscribeToAsync(selected, ct);
+            SetStatus(recordingStopped
+                ? $"Subscribed to {selected.Count} tag(s). Recording stopped because the subscribed tags changed — start a new recording to include the updated set."
+                : $"Subscribed to {selected.Count} tag(s). Listening for updates…");
         });
     }
 
@@ -324,8 +328,11 @@ public class OpcUaService
             {
                 if (IsSubscribed)
                 {
-                    await StopActiveSubscriptionHandleAsync();
-                    SetStatus("Subscription stopped (no tags enabled for subscription).");
+                    var wasRecording = IsRecording;
+                    await StopSubscriptionInternalAsync();
+                    SetStatus(wasRecording
+                        ? "Subscription stopped (no tags enabled for subscription). Recording stopped as well — start a new recording when ready."
+                        : "Subscription stopped (no tags enabled for subscription).");
                 }
                 return;
             }
@@ -333,8 +340,10 @@ public class OpcUaService
             var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
             if (!IsSubscribed || !desiredSet.SetEquals(_subscribedNodeIds))
             {
-                await SubscribeToAsync(desired, ct);
-                SetStatus($"Subscribed to {desired.Count} tag(s). Listening for updates…");
+                var recordingStopped = await SubscribeToAsync(desired, ct);
+                SetStatus(recordingStopped
+                    ? $"Subscribed to {desired.Count} tag(s). Recording stopped because the subscribed tags changed — start a new recording to include the updated set."
+                    : $"Subscribed to {desired.Count} tag(s). Listening for updates…");
             }
         });
     }
@@ -405,6 +414,14 @@ public class OpcUaService
 
     public Task StopRecordingAsync()
     {
+        StopRecordingInternal();
+        SetStatus("Recording stopped.");
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Closes the recording file (if any) and resets recording state. Does not touch the live subscription.</summary>
+    private void StopRecordingInternal(string? diagnosticsMessage = null)
+    {
         StreamWriter? writer;
         lock (_subscriptionSync)
         {
@@ -416,8 +433,9 @@ public class OpcUaService
         }
 
         writer?.Dispose();
-        SetStatus("Recording stopped.");
-        return Task.CompletedTask;
+
+        if (diagnosticsMessage is not null)
+            _diagnostics.Add(diagnosticsMessage);
     }
 
     /// <summary>Plots the currently selected tags on the live trend chart, subscribing if necessary.</summary>
@@ -433,8 +451,9 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             var selectedSet = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+            var recordingStopped = false;
             if (!IsSubscribed || !selectedSet.SetEquals(_subscribedNodeIds))
-                await SubscribeToAsync(selected, ct);
+                recordingStopped = await SubscribeToAsync(selected, ct);
 
             foreach (var id in selected)
             {
@@ -445,7 +464,9 @@ public class OpcUaService
             }
 
             IsChartVisible = true;
-            SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
+            SetStatus(recordingStopped
+                ? $"Trending {_trendedNodeIds.Count} tag(s) on the live chart. Recording stopped because the subscribed tags changed — start a new recording to include the updated set."
+                : $"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
         });
     }
 
@@ -509,7 +530,10 @@ public class OpcUaService
                 Axis: _trendAxisByNodeId.TryGetValue(id, out var a) ? a : "left"))
             .ToList();
 
-    private async Task SubscribeToAsync(List<string> selected, CancellationToken ct)
+    /// <summary>(Re)subscribes to exactly the given node IDs, replacing the current subscription. Returns
+    /// true if an in-progress recording had to be stopped because the new tag set no longer covers every
+    /// recorded tag (its columns would otherwise silently freeze instead of receiving live updates).</summary>
+    private async Task<bool> SubscribeToAsync(List<string> selected, CancellationToken ct)
     {
         await StopActiveSubscriptionHandleAsync();
 
@@ -528,13 +552,23 @@ public class OpcUaService
         }
 
         _displayNameByNodeId = BuildDisplayNameMap();
-        _subscribedNodeIds = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+        var newSubscribedNodeIds = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
+
+        var recordingStopped = false;
+        if (IsRecording && !_recordingNodeIds.All(id => newSubscribedNodeIds.Contains(id)))
+        {
+            StopRecordingInternal("Recording stopped: the subscribed tags changed and no longer cover every recorded tag.");
+            recordingStopped = true;
+        }
+
+        _subscribedNodeIds = newSubscribedNodeIds;
 
         _trendedNodeIds.RemoveAll(id => !_subscribedNodeIds.Contains(id));
         if (_trendedNodeIds.Count == 0)
             IsChartVisible = false;
 
         LastReadings = initialReadings;
+        return recordingStopped;
     }
 
     private Dictionary<string, string> BuildDisplayNameMap()
@@ -1002,16 +1036,8 @@ public class OpcUaService
     {
         var handleStopped = await StopActiveSubscriptionHandleAsync();
 
-        StreamWriter? writer;
-        lock (_subscriptionSync)
-        {
-            writer = _recordingWriter;
-            _recordingWriter = null;
-            IsRecording = false;
-            _recordingNodeIds = new();
-            _recordingLatestByNodeId.Clear();
-        }
-        writer?.Dispose();
+        if (IsRecording)
+            StopRecordingInternal("Recording stopped: the live subscription was stopped.");
 
         _trendedNodeIds.Clear();
         IsChartVisible = false;
