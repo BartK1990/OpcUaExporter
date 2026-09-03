@@ -97,7 +97,7 @@ public class OpcUaClientService
         _diagnostics.Add("Browse started.");
         var references = await session.FetchReferencesAsync(rootNodeId, ct: ct);
         var topLevelChildren = references
-            .Where(r => r.IsForward)
+            .Where(r => r.IsForward && r.NodeClass is NodeClass.Object or NodeClass.Variable)
             .Select(r => (Reference: r, NodeId: ExpandedNodeId.ToNodeId(r.NodeId, session.NamespaceUris)))
             .Where(x => x.NodeId is not null)
             .Select(x => (x.Reference, NodeId: x.NodeId!))
@@ -1090,7 +1090,7 @@ public class OpcUaClientService
 
         var references = await session.FetchReferencesAsync(nodeId, ct: ct);
         var forwardChildren = references
-            .Where(r => r.IsForward)
+            .Where(r => r.IsForward && r.NodeClass is NodeClass.Object or NodeClass.Variable)
             .Select(r => (Reference: r, NodeId: ExpandedNodeId.ToNodeId(r.NodeId, session.NamespaceUris)))
             .Where(x => x.NodeId is not null)
             .Select(x => (x.Reference, NodeId: x.NodeId!))
