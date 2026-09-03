@@ -31,7 +31,7 @@
     --sidebar-w: 280px;
     --stripe: rgba(255,255,255,0.02);
     --chart-grid: rgba(255,255,255,0.06);
-    --chart-label: rgba(255,255,255,0.45);
+    --chart-label: var(--text-primary);
 }
 
 /* ── Light theme ────────────────────────────────────────── */
@@ -56,7 +56,6 @@ html[data-theme="light"] {
     --blue: #2c6fc9;
     --stripe: rgba(0,0,0,0.025);
     --chart-grid: rgba(0,0,0,0.08);
-    --chart-label: rgba(0,0,0,0.5);
 }
 
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
