@@ -296,13 +296,23 @@
                                             <td class="mono">@tag.NodeId</td>
                                             <td class="mono">@(reading?.Error ?? reading?.Value?.ToString() ?? "–")</td>
                                             <td>
+                                                @{ var rowDataType = reading?.DataType ?? tag.DataType; }
                                                 <div class="inline-write">
-                                                    <input class="mono write-input" placeholder="value"
-                                                           value="@GetWriteInput(tag.NodeId)"
-                                                           @onchange="e => _writeInputByNodeId[tag.NodeId] = e.Value?.ToString() ?? string.Empty" />
+                                                    @if (IsDateTimeType(rowDataType))
+                                                    {
+                                                        <input type="datetime-local" step="1" class="mono write-input write-input-datetime"
+                                                               value="@FormatDateTimeLocal(GetWriteDateTime(tag.NodeId))"
+                                                               @onchange="e => SetWriteDateTime(tag.NodeId, ParseDateTimeLocal(e.Value?.ToString()))" />
+                                                    }
+                                                    else
+                                                    {
+                                                        <input class="mono write-input" placeholder="value"
+                                                               value="@GetWriteInput(tag.NodeId)"
+                                                               @onchange="e => _writeInputByNodeId[tag.NodeId] = e.Value?.ToString() ?? string.Empty" />
+                                                    }
                                                     <button class="btn btn-ghost icon-btn" title="Write value"
-                                                            disabled="@(Opc.IsBusy || string.IsNullOrWhiteSpace(GetWriteInput(tag.NodeId)))"
-                                                            @onclick="() => WriteInlineValue(tag.NodeId)">✎</button>
+                                                            disabled="@(Opc.IsBusy || !CanWriteInline(tag.NodeId, rowDataType))"
+                                                            @onclick="() => WriteInlineValue(tag.NodeId, rowDataType)">✎</button>
                                                 </div>
                                             </td>
                                             <td>@(reading?.DataType ?? tag.DataType)</td>
@@ -471,8 +481,18 @@
                 <p class="mono">@(_writeDialogDataType ?? "unknown")</p>
 
                 <div class="field-label">Value</div>
-                <input class="field-input" @bind="_writeDialogValue" @bind:event="oninput"
-                       @onkeydown="OnWriteDialogKeyDown" disabled="@Opc.IsBusy" />
+                @if (IsWriteDialogDateTime)
+                {
+                    <input type="datetime-local" step="1" class="field-input"
+                           value="@FormatDateTimeLocal(_writeDialogDateTimeValue)"
+                           @onchange="OnWriteDialogDateTimeChanged" disabled="@Opc.IsBusy" />
+                    <p class="write-dialog-hint">Picker enforces a valid date/time; value is written as UTC.</p>
+                }
+                else
+                {
+                    <input class="field-input" @bind="_writeDialogValue" @bind:event="oninput"
+                           @onkeydown="OnWriteDialogKeyDown" disabled="@Opc.IsBusy" />
+                }
 
                 @if (_writeDialogError is not null)
                 {
@@ -481,7 +501,7 @@
 
                 <div class="btn-row" style="margin-top:16px;">
                     <button class="btn btn-secondary" @onclick="SubmitWriteDialog"
-                            disabled="@(Opc.IsBusy || string.IsNullOrWhiteSpace(_writeDialogValue))">
+                            disabled="@(Opc.IsBusy || !CanSubmitWriteDialog)">
                         ✎ Write
                     </button>
                     <button class="btn btn-ghost" @onclick="CloseWriteDialog">Cancel</button>
@@ -973,9 +993,31 @@
     private string? _writeDialogDisplayName;
     private string? _writeDialogDataType;
     private string _writeDialogValue = string.Empty;
+    private DateTime? _writeDialogDateTimeValue;
     private string? _writeDialogError;
 
+    private bool IsWriteDialogDateTime => IsDateTimeType(_writeDialogDataType);
+
+    private bool CanSubmitWriteDialog => IsWriteDialogDateTime
+        ? _writeDialogDateTimeValue.HasValue
+        : !string.IsNullOrWhiteSpace(_writeDialogValue);
+
     private readonly Dictionary<string, string> _writeInputByNodeId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, DateTime?> _writeDateTimeByNodeId = new(StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsDateTimeType(string? dataType) =>
+        string.Equals(dataType, "DateTime", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Formats a value for an <c>&lt;input type="datetime-local"&gt;</c>, which requires seconds-precision, offset-free ISO text.</summary>
+    private static string FormatDateTimeLocal(DateTime? value) =>
+        value?.ToString("yyyy-MM-ddTHH:mm:ss") ?? string.Empty;
+
+    /// <summary>Parses the exact format emitted by an <c>&lt;input type="datetime-local"&gt;</c>; anything else (including an empty/cleared field) is rejected.</summary>
+    private static DateTime? ParseDateTimeLocal(string? text) =>
+        DateTime.TryParseExact(text, "yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.None, out var parsed)
+            ? parsed
+            : null;
 
     private void HandleContextMenu((OpcTag Tag, MouseEventArgs Args) e)
     {
@@ -1025,8 +1067,26 @@
         _writeDialogNodeId = tag.NodeId;
         _writeDialogDisplayName = tag.DisplayName;
         _writeDialogDataType = reading?.DataType ?? tag.DataType;
-        _writeDialogValue = reading?.Value?.ToString() ?? tag.Value?.ToString() ?? string.Empty;
         _writeDialogError = null;
+
+        var currentValue = reading?.Value ?? tag.Value;
+        if (IsWriteDialogDateTime)
+        {
+            _writeDialogValue = string.Empty;
+            _writeDialogDateTimeValue = currentValue switch
+            {
+                DateTime dt => dt,
+                string s when DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var parsed) => parsed,
+                _ => null
+            };
+        }
+        else
+        {
+            _writeDialogDateTimeValue = null;
+            _writeDialogValue = currentValue?.ToString() ?? string.Empty;
+        }
+
         _writeDialogOpen = true;
     }
 
@@ -1037,12 +1097,22 @@
         _writeDialogError = null;
     }
 
+    private void OnWriteDialogDateTimeChanged(ChangeEventArgs e)
+    {
+        _writeDialogDateTimeValue = ParseDateTimeLocal(e.Value?.ToString());
+        _writeDialogError = _writeDialogDateTimeValue is null ? "Enter a valid date and time." : null;
+    }
+
     private async Task SubmitWriteDialog()
     {
-        if (string.IsNullOrWhiteSpace(_writeDialogNodeId) || string.IsNullOrWhiteSpace(_writeDialogValue))
+        if (string.IsNullOrWhiteSpace(_writeDialogNodeId) || !CanSubmitWriteDialog)
             return;
 
-        var result = await Opc.WriteValueAsync(_writeDialogNodeId, _writeDialogValue);
+        var rawValue = IsWriteDialogDateTime
+            ? DateTime.SpecifyKind(_writeDialogDateTimeValue!.Value, DateTimeKind.Utc).ToString("o")
+            : _writeDialogValue;
+
+        var result = await Opc.WriteValueAsync(_writeDialogNodeId, rawValue);
         if (result?.Error is not null)
             _writeDialogError = result.Error;
         else
@@ -1058,10 +1128,32 @@
     private string GetWriteInput(string nodeId)
         => _writeInputByNodeId.TryGetValue(nodeId, out var v) ? v : string.Empty;
 
-    private async Task WriteInlineValue(string nodeId)
+    private DateTime? GetWriteDateTime(string nodeId)
+        => _writeDateTimeByNodeId.TryGetValue(nodeId, out var v) ? v : null;
+
+    private void SetWriteDateTime(string nodeId, DateTime? value)
+        => _writeDateTimeByNodeId[nodeId] = value;
+
+    private bool CanWriteInline(string nodeId, string? dataType) =>
+        IsDateTimeType(dataType) ? GetWriteDateTime(nodeId).HasValue : !string.IsNullOrWhiteSpace(GetWriteInput(nodeId));
+
+    private async Task WriteInlineValue(string nodeId, string? dataType)
     {
-        if (!_writeInputByNodeId.TryGetValue(nodeId, out var rawValue) || string.IsNullOrWhiteSpace(rawValue))
-            return;
+        string rawValue;
+        if (IsDateTimeType(dataType))
+        {
+            if (GetWriteDateTime(nodeId) is not { } dt)
+                return;
+
+            rawValue = DateTime.SpecifyKind(dt, DateTimeKind.Utc).ToString("o");
+        }
+        else
+        {
+            if (!_writeInputByNodeId.TryGetValue(nodeId, out var text) || string.IsNullOrWhiteSpace(text))
+                return;
+
+            rawValue = text;
+        }
 
         await Opc.WriteValueAsync(nodeId, rawValue);
     }

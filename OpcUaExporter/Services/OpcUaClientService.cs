@@ -1254,11 +1254,7 @@ public class OpcUaClientService
         if (dataTypeId.IsNullNodeId)
             return null;
 
-        var numericTypeId = dataTypeId.IdType == IdType.Numeric && dataTypeId.Identifier is not null
-            ? Convert.ToUInt32(dataTypeId.Identifier)
-            : 0u;
-
-        var builtInType = TypeInfo.GetBuiltInType(numericTypeId);
+        var builtInType = await ResolveBuiltInTypeAsync(dataTypeId, session);
         if (builtInType != BuiltInType.Null)
             return builtInType.ToString();
 
@@ -1271,6 +1267,43 @@ public class OpcUaClientService
         {
             return dataTypeId.ToString();
         }
+    }
+
+    /// <summary>
+    /// Resolves a DataType NodeId to its underlying OPC UA built-in type, walking up the
+    /// "HasSubtype" hierarchy so subtypes (e.g. the standard UtcTime type, which subtypes
+    /// DateTime, or a vendor-specific alias) are still recognized as their base built-in type.
+    /// Also guards against misreading a numeric identifier from a non-zero namespace as a
+    /// standard type id (only namespace 0 numeric ids map directly to a BuiltInType).
+    /// </summary>
+    private static async Task<BuiltInType> ResolveBuiltInTypeAsync(NodeId dataTypeId, Session session)
+    {
+        var currentId = dataTypeId;
+
+        for (var depth = 0; depth < 10 && currentId is not null && !currentId.IsNullNodeId; depth++)
+        {
+            var builtInType = TypeInfo.GetBuiltInType(currentId);
+            if (builtInType != BuiltInType.Null)
+                return builtInType;
+
+            try
+            {
+                var references = await session.FetchReferencesAsync(currentId);
+                var superTypeRef = references.FirstOrDefault(r =>
+                    !r.IsForward && r.ReferenceTypeId == ReferenceTypeIds.HasSubtype);
+
+                if (superTypeRef is null)
+                    break;
+
+                currentId = ExpandedNodeId.ToNodeId(superTypeRef.NodeId, session.NamespaceUris);
+            }
+            catch
+            {
+                break;
+            }
+        }
+
+        return BuiltInType.Null;
     }
 
     private static int CountVariables(IEnumerable<OpcTag> tags)

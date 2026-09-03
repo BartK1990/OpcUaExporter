@@ -614,11 +614,21 @@ body.row-resizing * {
     padding: 3px 6px;
 }
 
+.write-input-datetime {
+    width: 170px;
+}
+
 .write-dialog-nodeid {
     color: var(--text-muted);
     font-size: 11px;
     word-break: break-all;
     margin-bottom: 8px;
+}
+
+.write-dialog-hint {
+    color: var(--text-muted);
+    font-size: 11px;
+    margin-top: 6px;
 }
 
 .selected-table-wrapper {
