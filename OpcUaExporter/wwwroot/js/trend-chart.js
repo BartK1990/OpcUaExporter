@@ -66,7 +66,7 @@
         var label = cs.getPropertyValue('--chart-label').trim();
         return {
             grid: grid || 'rgba(255,255,255,0.06)',
-            label: label || 'rgba(255,255,255,0.45)'
+            label: label || '#ffffff'
         };
     }
 
@@ -96,7 +96,7 @@
             return s && axisOf(s) === 'right';
         });
 
-        var padL = 46 * dpr, padR = (hasRightAxis ? 46 : 10) * dpr, padT = 10 * dpr, padB = 20 * dpr;
+        var padL = 56 * dpr, padR = (hasRightAxis ? 56 : 10) * dpr, padT = 10 * dpr, padB = 26 * dpr;
         var plotW = Math.max(1, w - padL - padR);
         var plotH = Math.max(1, h - padT - padB);
 
@@ -152,11 +152,15 @@
         var rightRange = hasRightAxis ? computeRange('right') : null;
         var anyPoints = !!leftRange || !!rightRange;
 
+        // y-axis grid/label density — more steps means more readable values
+        // along the Y axis instead of just min/max plus a couple in between.
+        var yGridSteps = 9;
+
         // grid
         ctx.strokeStyle = colors.grid;
         ctx.lineWidth = 1;
-        for (var i = 0; i <= 4; i++) {
-            var gy = padT + (plotH * i / 4);
+        for (var i = 0; i <= yGridSteps; i++) {
+            var gy = padT + (plotH * i / yGridSteps);
             ctx.beginPath();
             ctx.moveTo(padL, gy);
             ctx.lineTo(padL + plotW, gy);
@@ -180,8 +184,7 @@
 
         // y-axis labels — one per gridline (not just min/max) so intermediate
         // values can be read off directly instead of interpolated by eye.
-        var yGridSteps = 4;
-        ctx.font = (10 * dpr) + 'px monospace';
+        ctx.font = 'bold ' + (13 * dpr) + 'px monospace';
         ctx.textBaseline = 'middle';
         for (var gi = 0; gi <= yGridSteps; gi++) {
             var gFrac = gi / yGridSteps;
@@ -203,7 +206,7 @@
         // x-axis timestamp ticks
         var tickCount = 7;
         ctx.fillStyle = colors.label;
-        ctx.font = (10 * dpr) + 'px monospace';
+        ctx.font = 'bold ' + (12 * dpr) + 'px monospace';
         ctx.textBaseline = 'top';
         for (var ti = 0; ti < tickCount; ti++) {
             var frac = ti / (tickCount - 1);
