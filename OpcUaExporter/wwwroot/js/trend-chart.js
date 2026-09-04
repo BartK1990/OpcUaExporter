@@ -100,28 +100,52 @@
         var plotW = Math.max(1, w - padL - padR);
         var plotH = Math.max(1, h - padT - padB);
 
-        // Builds the points actually drawn for a series: anchored at tMin using the most
-        // recent value known as of the window start (so a tag that hasn't updated in a
-        // while still shows its last value instead of nothing), and held flat out to tMax
-        // (now) so the line always reflects the tag's current value, not just update times.
+        // Builds the points actually drawn for a series. OPC UA servers commonly only
+        // report a notification when a value *changes*, so two consecutive real updates
+        // can be far apart in time. Connecting them directly would draw a diagonal ramp,
+        // wrongly implying the value drifted gradually between the two readings, when in
+        // reality it was held constant and then stepped. To render this correctly (and so
+        // a live tag visibly ticks forward even without new data), this resamples onto a
+        // one-point-per-second heartbeat grid, holding the last known value at each tick,
+        // while still keeping every real update at its exact timestamp so genuine changes
+        // show up precisely. The result is anchored at tMin (using the most recent value
+        // known as of the window start) and held flat out to tMax (now).
+        var HEARTBEAT_MS = 1000;
         function effectivePoints(s) {
             if (s.points.length === 0) return [];
 
             var before = null;
-            var visible = [];
+            var real = [];
             for (var i = 0; i < s.points.length; i++) {
                 var p = s.points[i];
                 if (p.t <= tMin) before = p;
-                else if (p.t <= tMax) visible.push(p);
+                else if (p.t <= tMax) real.push(p);
             }
+            if (!before && real.length === 0) return [];
 
             var pts = [];
-            if (before) pts.push({ t: tMin, v: before.v });
-            Array.prototype.push.apply(pts, visible);
-            if (pts.length === 0) return [];
+            var lastT = tMin;
+            var lastV = before ? before.v : real[0].v;
+            pts.push({ t: tMin, v: lastV });
 
-            var last = pts[pts.length - 1];
-            if (last.t < tMax) pts.push({ t: tMax, v: last.v });
+            real.forEach(function (p) {
+                var t = lastT + HEARTBEAT_MS;
+                while (t < p.t) {
+                    pts.push({ t: t, v: lastV });
+                    t += HEARTBEAT_MS;
+                }
+                pts.push({ t: p.t, v: p.v });
+                lastT = p.t;
+                lastV = p.v;
+            });
+
+            var t = lastT + HEARTBEAT_MS;
+            while (t < tMax) {
+                pts.push({ t: t, v: lastV });
+                t += HEARTBEAT_MS;
+            }
+            if (pts[pts.length - 1].t < tMax) pts.push({ t: tMax, v: lastV });
+
             return pts;
         }
 
@@ -170,6 +194,11 @@
             return v.toFixed(decimals);
         }
 
+        // More vertical space means more room to fit labels without them crowding
+        // into each other, so the tick count scales with the plot's pixel height
+        // instead of always targeting a fixed number of labels.
+        var targetTicks = Math.max(3, Math.min(20, Math.round(plotH / (42 * dpr)) + 1));
+
         function computeRange(axis) {
             var vMin = Infinity, vMax = -Infinity, any = false;
             state.order.forEach(function (id) {
@@ -182,7 +211,7 @@
                 });
             });
             if (!any) return null;
-            return niceScale(vMin, vMax, 9);
+            return niceScale(vMin, vMax, targetTicks);
         }
 
         var leftRange = computeRange('left');
@@ -203,7 +232,7 @@
                 ctx.stroke();
             });
         } else {
-            var yGridSteps = 9;
+            var yGridSteps = targetTicks;
             for (var i = 0; i <= yGridSteps; i++) {
                 var gy0 = padT + (plotH * i / yGridSteps);
                 ctx.beginPath();
@@ -283,6 +312,16 @@
                 if (idx === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             });
             ctx.stroke();
+
+            // Marks every per-second (and real-update) point, not just the latest one,
+            // so the chart visibly reads as a live series ticking forward each second
+            // rather than a single line that only moves when a marker appears at the end.
+            ctx.fillStyle = colorFor(id);
+            pts.forEach(function (p) {
+                ctx.beginPath();
+                ctx.arc(xFor(p.t), yFor(p.v), 1.5 * dpr, 0, Math.PI * 2);
+                ctx.fill();
+            });
 
             var last = pts[pts.length - 1];
             ctx.fillStyle = colorFor(id);
