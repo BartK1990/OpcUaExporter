@@ -385,7 +385,15 @@ body.pane-resizing * {
     font-family: var(--font-mono);
     font-size: 11px;
     color: var(--red);
-    margin-bottom: 10px;
+    min-width: 0;
+    flex: 1;
+}
+
+.recording-indicator .recording-path {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .recording-dot {

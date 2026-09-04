@@ -302,7 +302,12 @@ public class OpcUaService
         foreach (var tag in selectedTags)
             tag.IsSubscribeEnabled = true;
 
-        var selected = selectedTags.Select(t => t.NodeId).ToList();
+        // Union in any tags already on the live trend chart so this doesn't silently drop
+        // them from the subscription — trending relies on the subscription for its data.
+        var selected = selectedTags.Select(t => t.NodeId)
+            .Concat(_trendedNodeIds)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
 
         await RunSafe(async () =>
         {
@@ -323,7 +328,13 @@ public class OpcUaService
 
         await RunSafe(async () =>
         {
-            var desired = GetSubscribeEnabledNodeIds();
+            // Union in any tags already on the live trend chart so unchecking an unrelated
+            // tag doesn't silently drop a trended one from the subscription — trending
+            // relies on the subscription for its data.
+            var desired = GetSubscribeEnabledNodeIds()
+                .Concat(_trendedNodeIds)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             if (desired.Count == 0)
             {
                 if (IsSubscribed)
@@ -584,6 +595,7 @@ public class OpcUaService
         }
 
         _subscribedNodeIds = newSubscribedNodeIds;
+        SyncSubscribeEnabledFlags(_subscribedNodeIds);
 
         _trendedNodeIds.RemoveAll(id => !_subscribedNodeIds.Contains(id));
         if (_trendedNodeIds.Count == 0)
@@ -861,6 +873,18 @@ public class OpcUaService
            .Select(t => t.NodeId)
            .ToList();
 
+    /// <summary>Keeps every tag's "Include in subscription" checkbox in sync with what's actually subscribed,
+    /// so it's never possible for a checkbox to be checked while its tag isn't live-subscribed (or vice versa) —
+    /// including tags a trend or recording auto-subscribed without the user checking their box directly.</summary>
+    private void SyncSubscribeEnabledFlags(HashSet<string> subscribedNodeIds)
+    {
+        foreach (var tag in FlattenAll(TagTree))
+        {
+            if (tag.IsSelectable)
+                tag.IsSubscribeEnabled = subscribedNodeIds.Contains(tag.NodeId);
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
@@ -1051,6 +1075,7 @@ public class OpcUaService
         }
 
         _subscribedNodeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        SyncSubscribeEnabledFlags(_subscribedNodeIds);
 
         cts?.Cancel();
         cts?.Dispose();
