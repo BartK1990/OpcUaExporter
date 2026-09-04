@@ -326,7 +326,7 @@
                                             </td>
                                             <td>@(reading?.DataType ?? tag.DataType)</td>
                                             <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
-                                            <td class="mono">@reading?.Timestamp</td>
+                                            <td class="mono">@FormatTimestamp(reading?.Timestamp)</td>
                                         </tr>
                                     }
                                 </tbody>
@@ -1049,6 +1049,18 @@
 
     private static bool IsDateTimeType(string? dataType) =>
         string.Equals(dataType, "DateTime", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Formats a reading's ISO-8601 UTC timestamp as a local, 24-hour "yyyy-MM-dd HH:mm:ss" string for display.</summary>
+    private static string FormatTimestamp(string? isoTimestamp)
+    {
+        if (string.IsNullOrEmpty(isoTimestamp))
+            return string.Empty;
+
+        return DateTime.TryParse(isoTimestamp, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+            : isoTimestamp;
+    }
 
     /// <summary>Formats a value for an <c>&lt;input type="datetime-local"&gt;</c>, which requires seconds-precision, offset-free ISO text.</summary>
     private static string FormatDateTimeLocal(DateTime? value) =>
