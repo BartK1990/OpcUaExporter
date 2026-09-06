@@ -105,16 +105,15 @@
         var plotW = Math.max(1, w - padL - padR);
         var plotH = Math.max(1, h - padT - padB);
 
-        // Builds the points actually drawn for a series. OPC UA servers commonly only
-        // report a notification when a value *changes*, so two consecutive real updates
-        // can be far apart in time. Connecting them directly would draw a diagonal ramp,
-        // wrongly implying the value drifted gradually between the two readings, when in
-        // reality it was held constant and then stepped. To render this correctly (and so
-        // a live tag visibly ticks forward even without new data), this resamples onto a
-        // one-point-per-second heartbeat grid, holding the last known value at each tick,
-        // while still keeping every real update at its exact timestamp so genuine changes
-        // show up precisely. The result is anchored at tMin (using the most recent value
-        // known as of the window start) and held flat out to tMax (now).
+        // Builds the points actually drawn for a series, resampled onto a strict
+        // one-point-per-second grid so every series always has exactly one point
+        // per second and consecutive points are simply connected with a straight
+        // line (no mix of held-flat "steps" and diagonal "ramps" between points).
+        // Each grid tick takes the most recent real value known as of that tick.
+        // The grid starts at the window start (tMin) only if the series already
+        // has history from before the window — otherwise it starts at the first
+        // real point's own timestamp, so nothing is drawn before the moment the
+        // tag was actually added to the chart.
         function effectivePoints(s) {
             if (s.points.length === 0) return [];
 
@@ -127,28 +126,23 @@
             }
             if (!before && real.length === 0) return [];
 
-            var pts = [];
-            var lastT = tMin;
+            var startT = before ? tMin : real[0].t;
             var lastV = before ? before.v : real[0].v;
-            pts.push({ t: tMin, v: lastV });
 
-            real.forEach(function (p) {
-                var t = lastT + HEARTBEAT_MS;
-                while (t < p.t) {
-                    pts.push({ t: t, v: lastV });
-                    t += HEARTBEAT_MS;
+            var pts = [];
+            var realIdx = 0;
+            for (var t = startT; t < tMax; t += HEARTBEAT_MS) {
+                while (realIdx < real.length && real[realIdx].t <= t) {
+                    lastV = real[realIdx].v;
+                    realIdx++;
                 }
-                pts.push({ t: p.t, v: p.v });
-                lastT = p.t;
-                lastV = p.v;
-            });
-
-            var t = lastT + HEARTBEAT_MS;
-            while (t < tMax) {
                 pts.push({ t: t, v: lastV });
-                t += HEARTBEAT_MS;
             }
-            if (pts[pts.length - 1].t < tMax) pts.push({ t: tMax, v: lastV });
+            while (realIdx < real.length) {
+                lastV = real[realIdx].v;
+                realIdx++;
+            }
+            pts.push({ t: tMax, v: lastV });
 
             return pts;
         }
@@ -344,9 +338,11 @@
                 state.resizeObserver.observe(state.wrap);
             }
 
-            // Redraw once a second even when no new point arrives, so the chart keeps
-            // scrolling forward in real time and holds each series at its last known
-            // value instead of freezing at the moment of the last update.
+            // Single once-a-second redraw driver for live data: this keeps the chart
+            // scrolling forward and holding each series at its last known value even
+            // when no new point arrives, and — since addPoint itself never schedules a
+            // draw — it's also what caps the whole chart to exactly one repaint per
+            // second no matter how many tags are trended or how often they update.
             if (state.tickInterval) {
                 clearInterval(state.tickInterval);
             }
@@ -402,7 +398,12 @@
                 s.points.splice(0, s.points.length - MAX_POINTS_PER_SERIES);
             }
 
-            scheduleDraw();
+            // Deliberately no scheduleDraw() here. With several tags trended at once,
+            // each one's addPoint call lands at a slightly different moment within the
+            // same second, and redrawing on every call would make the whole chart visibly
+            // repaint more than once per second. The once-a-second state.tickInterval
+            // (see init) is the single driver for live-data redraws, so newly committed
+            // points are picked up on its next tick instead of immediately.
         },
 
         removeSeries: function (nodeId) {
