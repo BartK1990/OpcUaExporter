@@ -93,7 +93,7 @@
                 <label class="field-label">Output Path</label>
                 <div class="path-row">
                     <input class="field-input" @bind="_exportPath" placeholder="C:\export\tags.csv" />
-                    <button class="btn btn-ghost icon-btn" @onclick="BrowseOutputPath" title="Browse…">📂</button>
+                    <button class="btn btn-ghost icon-btn" @onclick="BrowseOutputPath" title="Browse…"><i class="bi bi-folder2-open"></i></button>
                 </div>
 
                 <button class="btn btn-accent" @onclick="Export" disabled="@(Opc.IsBusy || SelectedCount == 0)">
@@ -129,11 +129,14 @@
                         <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
                     </div>
                     <div class="tag-search-row">
-                        <input class="field-input tag-search-input" placeholder="🔍 Search by name or node ID…"
-                               @bind="_tagFilter" @bind:event="oninput" />
+                        <div class="tag-search-wrap">
+                            <i class="bi bi-search tag-search-icon"></i>
+                            <input class="field-input tag-search-input" placeholder="Search by name or node ID…"
+                                   @bind="_tagFilter" @bind:event="oninput" />
+                        </div>
                         @if (!string.IsNullOrEmpty(_tagFilter))
                         {
-                            <button class="btn btn-ghost icon-btn" title="Clear search" @onclick="ClearTagFilter">✕</button>
+                            <button class="btn btn-ghost icon-btn" title="Clear search" @onclick="ClearTagFilter"><i class="bi bi-x-lg"></i></button>
                         }
                         <label class="tag-filter-toggle">
                             <input type="checkbox" @bind="_selectedOnly" />
@@ -148,7 +151,7 @@
                         @if (IsTagFilterActive && FilteredTagTree.Count == 0)
                         {
                             <div class="empty-state">
-                                <div class="empty-icon">🔍</div>
+                                <div class="empty-icon"><i class="bi bi-search"></i></div>
                                 <p>No tags match your filter.</p>
                             </div>
                         }
@@ -188,12 +191,12 @@
                             ▶ Read Values
                         </button>
 
-                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)" title="Checks the 🔔 box for every selected tag and subscribes to all of them">
-                            🔔 Subscribe All
+                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)" title="Checks the subscribe box for every selected tag and subscribes to all of them">
+                            <i class="bi bi-bell"></i> Subscribe All
                         </button>
 
                         <button class="btn btn-secondary" @onclick="TrendSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
-                            📈 Trend All
+                            <i class="bi bi-graph-up"></i> Trend All
                         </button>
 
                         <button class="btn btn-ghost" @onclick="ClearSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
@@ -250,8 +253,8 @@
                                 <thead>
                                     <tr>
                                         <th class="col-fixed-icon"></th>
-                                        <th class="col-fixed-icon" title="Subscribe">🔔</th>
-                                        <th class="col-fixed-icon" title="Add to trend">📈</th>
+                                        <th class="col-fixed-icon" title="Subscribe"><i class="bi bi-bell"></i></th>
+                                        <th class="col-fixed-icon" title="Add to trend"><i class="bi bi-graph-up"></i></th>
                                         <th class="resizable-th">
                                             <span class="th-label sortable" @onclick="ToggleSelectedSort" title="Sort by name">Display Name @SelectedSortIndicator</span>
                                             <span class="col-resize-handle"></span>
