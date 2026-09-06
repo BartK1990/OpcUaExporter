@@ -4,6 +4,11 @@
     var PALETTE = ['#f0a030', '#60a8f0', '#3ecf8e', '#f06060', '#c060f0', '#f0e060', '#60f0d0', '#f08060'];
     var DEFAULT_WINDOW_MS = 60 * 1000;
     var MAX_POINTS_PER_SERIES = 6000;
+    // The chart is designed to tick forward once per second (see effectivePoints below).
+    // Some OPC UA servers report data-change notifications faster than the requested
+    // sampling interval regardless of what the client asks for, which would otherwise
+    // make the chart visibly add more than one point per second per series.
+    var HEARTBEAT_MS = 1000;
 
     var state = {
         canvas: null,
@@ -110,7 +115,6 @@
         // while still keeping every real update at its exact timestamp so genuine changes
         // show up precisely. The result is anchored at tMin (using the most recent value
         // known as of the window start) and held flat out to tMax (now).
-        var HEARTBEAT_MS = 1000;
         function effectivePoints(s) {
             if (s.points.length === 0) return [];
 
@@ -313,16 +317,6 @@
             });
             ctx.stroke();
 
-            // Marks every per-second (and real-update) point, not just the latest one,
-            // so the chart visibly reads as a live series ticking forward each second
-            // rather than a single line that only moves when a marker appears at the end.
-            ctx.fillStyle = colorFor(id);
-            pts.forEach(function (p) {
-                ctx.beginPath();
-                ctx.arc(xFor(p.t), yFor(p.v), 1.5 * dpr, 0, Math.PI * 2);
-                ctx.fill();
-            });
-
             var last = pts[pts.length - 1];
             ctx.fillStyle = colorFor(id);
             ctx.beginPath();
@@ -385,11 +379,20 @@
             // in the real label/axis (and adopt these points) once it runs.
             var s = state.series[nodeId];
             if (!s) {
-                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left' };
+                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left', lastCommitT: null };
                 if (state.order.indexOf(nodeId) < 0) state.order.push(nodeId);
             }
 
+            // Some servers push data-change notifications faster than once a second no
+            // matter what sampling interval was requested. Drop those extra updates
+            // outright (rather than folding them into the pending point) so the chart's
+            // displayed value only ever changes once per second, not just its committed
+            // history — otherwise the last point would still visibly jitter in between.
+            if (s.lastCommitT !== null && (timestampMs - s.lastCommitT) < HEARTBEAT_MS) {
+                return;
+            }
             s.points.push({ t: timestampMs, v: value });
+            s.lastCommitT = timestampMs;
 
             var cutoff = timestampMs - state.windowMs;
             while (s.points.length > 0 && s.points[0].t < cutoff) {

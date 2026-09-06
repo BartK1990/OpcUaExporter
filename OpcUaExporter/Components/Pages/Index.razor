@@ -213,16 +213,12 @@
                             <button class="btn btn-ghost" @onclick="StopRecording" disabled="@Opc.IsBusy">
                                 ⏹ Stop Recording
                             </button>
+                            <div class="recording-indicator" title="@Opc.RecordingFilePath">
+                                <span class="recording-dot"></span>
+                                <span class="recording-path">Recording (@Opc.RecordedRowCount rows) → @Opc.RecordingFilePath</span>
+                            </div>
                         }
                     </div>
-
-                    @if (Opc.IsRecording)
-                    {
-                        <div class="recording-indicator">
-                            <span class="recording-dot"></span>
-                            <span>Recording (@Opc.RecordedRowCount rows) → @Opc.RecordingFilePath</span>
-                        </div>
-                    }
 
                     <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@(Opc.IsBusy || !Opc.IsSubscribed)">
                         ⏹ Stop Subscription
