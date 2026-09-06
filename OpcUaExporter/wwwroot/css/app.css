@@ -747,9 +747,26 @@ body.row-resizing * {
     flex-shrink: 0;
 }
 
-.tag-search-input {
+.tag-search-wrap {
+    position: relative;
     flex: 1;
     min-width: 140px;
+    display: flex;
+}
+
+.tag-search-icon {
+    position: absolute;
+    left: 9px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-secondary);
+    font-size: 13px;
+    pointer-events: none;
+}
+
+.tag-search-input {
+    width: 100%;
+    padding-left: 28px;
 }
 
 .tag-filter-toggle {
