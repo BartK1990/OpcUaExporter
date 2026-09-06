@@ -93,7 +93,7 @@
                 <label class="field-label">Output Path</label>
                 <div class="path-row">
                     <input class="field-input" @bind="_exportPath" placeholder="C:\export\tags.csv" />
-                    <button class="btn btn-ghost icon-btn" @onclick="BrowseOutputPath" title="Browse…">📂</button>
+                    <button class="btn btn-ghost icon-btn" @onclick="BrowseOutputPath" title="Browse…"><i class="bi bi-folder2-open"></i></button>
                 </div>
 
                 <button class="btn btn-accent" @onclick="Export" disabled="@(Opc.IsBusy || SelectedCount == 0)">

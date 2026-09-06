@@ -20,7 +20,7 @@
                    @onchange="() => OnToggle.InvokeAsync(Tag)" />
         }
 
-        <span class="tag-icon">@NodeIcon</span>
+        <span class="tag-icon"><i class="bi @NodeIcon"></i></span>
         <span class="tag-name">@Tag.DisplayName</span>
 
         @if (IsSubscribed)
@@ -107,8 +107,8 @@
 
     private string NodeIcon => Tag.NodeClass switch
     {
-        "Object"   => "📁",
+        "Object"   => IsExpanded && Tag.Children.Any() ? "bi-folder2-open" : "bi-folder2",
         "Variable" => "",
-        _          => "○"
+        _          => "bi-circle"
     };
 }
