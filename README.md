@@ -4,7 +4,7 @@ A Windows desktop application built with **Blazor Hybrid (WPF)** that connects t
 
 OPC UA communication is handled natively from .NET using the [OPC Foundation's UA-.NETStandard](https://github.com/OPCFoundation/UA-.NETStandard) client SDK — no external runtime or subprocess is involved.
 
-<img width="1255" height="783" alt="opcuaexporter gif" src="https://github.com/user-attachments/assets/ce6c7b06-adcc-4552-89ce-715dc30faabf" />
+<img width="1401" height="1007" alt="GIF 2026-09-06 23-17-43" src="https://github.com/user-attachments/assets/bb262715-6b95-40f5-884a-1788d885bd56" />
 
 ---
 
