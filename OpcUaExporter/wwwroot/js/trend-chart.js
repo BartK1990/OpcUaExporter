@@ -89,12 +89,20 @@
 
         // Use real wall-clock time as the right edge of the window so the chart keeps
         // scrolling forward even when a tag hasn't produced a new value recently — the
-        // last known value is then held flat out to "now" (see effectivePoints below).
+        // last known value is then held out to the edge (see effectivePoints below).
         // The .NET host and the WebView2 JS runtime share the same OS clock, so there's
         // no meaningful drift to guard against here.
-        var now = Date.now();
-        var tMin = now - state.windowMs;
-        var tMax = now;
+        //
+        // The edge is snapped *down* to a whole HEARTBEAT_MS boundary rather than being
+        // the raw Date.now(). Redraws don't land at an exact 1 s cadence, so an unsnapped
+        // edge would slide the window by an arbitrary number of milliseconds each frame,
+        // and with it the resampling grid in effectivePoints — moving every plotted point
+        // slightly relative to the underlying samples and making segments visibly flip
+        // between flat and sloped from one repaint to the next. Snapping makes the window
+        // (and therefore the grid) advance in exact one-second steps, so a point once
+        // plotted keeps its position until it scrolls off the left edge.
+        var tMax = Math.floor(Date.now() / HEARTBEAT_MS) * HEARTBEAT_MS;
+        var tMin = tMax - state.windowMs;
 
         var hasRightAxis = state.order.some(function (id) {
             var s = state.series[id];
@@ -110,39 +118,51 @@
         // per second and consecutive points are simply connected with a straight
         // line (no mix of held-flat "steps" and diagonal "ramps" between points).
         // Each grid tick takes the most recent real value known as of that tick.
+        //
+        // The grid ticks are absolute (whole multiples of HEARTBEAT_MS since the
+        // epoch, which is what tMin/tMax are snapped to above), never relative to
+        // the moment of the redraw. That's what keeps a point stationary once it
+        // has been plotted: the same grid tick always resolves to the same sample,
+        // so the shape of the line only ever grows on the right and is clipped on
+        // the left, instead of every segment being re-sampled at a slightly
+        // different offset each frame.
+        //
         // The grid starts at the window start (tMin) only if the series already
         // has history from before the window — otherwise it starts at the first
-        // real point's own timestamp, so nothing is drawn before the moment the
-        // tag was actually added to the chart.
+        // grid tick at or after the series' first real point, so nothing is drawn
+        // before the moment the tag was actually added to the chart.
         function effectivePoints(s) {
-            if (s.points.length === 0) return [];
+            var all = s.points;
+            if (all.length === 0) return [];
 
-            var before = null;
-            var real = [];
-            for (var i = 0; i < s.points.length; i++) {
-                var p = s.points[i];
-                if (p.t <= tMin) before = p;
-                else if (p.t <= tMax) real.push(p);
+            // Value carried into the first drawn tick: the newest sample at or
+            // before the window start, when the series has that much history.
+            var idx = 0;
+            var lastV = null;
+            var hasHistory = false;
+            while (idx < all.length && all[idx].t <= tMin) {
+                lastV = all[idx].v;
+                hasHistory = true;
+                idx++;
             }
-            if (!before && real.length === 0) return [];
 
-            var startT = before ? tMin : real[0].t;
-            var lastV = before ? before.v : real[0].v;
+            var startT = hasHistory
+                ? tMin
+                : Math.ceil(all[idx].t / HEARTBEAT_MS) * HEARTBEAT_MS;
+            if (startT > tMax) return [];
 
             var pts = [];
-            var realIdx = 0;
-            for (var t = startT; t < tMax; t += HEARTBEAT_MS) {
-                while (realIdx < real.length && real[realIdx].t <= t) {
-                    lastV = real[realIdx].v;
-                    realIdx++;
+            for (var t = startT; t <= tMax; t += HEARTBEAT_MS) {
+                // Samples newer than tMax are deliberately left pending: they get
+                // picked up by the grid tick that actually covers them, so a value
+                // never lands at one x position on one frame and a different one
+                // on the next.
+                while (idx < all.length && all[idx].t <= t) {
+                    lastV = all[idx].v;
+                    idx++;
                 }
                 pts.push({ t: t, v: lastV });
             }
-            while (realIdx < real.length) {
-                lastV = real[realIdx].v;
-                realIdx++;
-            }
-            pts.push({ t: tMax, v: lastV });
 
             return pts;
         }
@@ -390,7 +410,10 @@
             s.points.push({ t: timestampMs, v: value });
             s.lastCommitT = timestampMs;
 
-            var cutoff = timestampMs - state.windowMs;
+            // Keep a little more than one window of history: draw() needs the newest
+            // sample at or before the window start to anchor the left edge, and its
+            // window edge can sit slightly further back than this sample's timestamp.
+            var cutoff = timestampMs - state.windowMs - 2 * HEARTBEAT_MS;
             while (s.points.length > 0 && s.points[0].t < cutoff) {
                 s.points.shift();
             }
