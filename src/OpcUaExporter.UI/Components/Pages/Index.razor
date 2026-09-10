@@ -3,6 +3,7 @@
 @using OpcUaExporter.Services
 @inject OpcUaService Opc
 @inject IJSRuntime JS
+@inject IFileDialogService Dialogs
 @inject DiagnosticsLogService Diagnostics
 @inject ThemeService ThemeSvc
 @implements IDisposable
@@ -686,18 +687,11 @@
             var lastProfilePath = Opc.GetExistingLastProfilePath();
             if (!string.IsNullOrWhiteSpace(lastProfilePath))
             {
-                try
+                var shouldLoad = await Dialogs.ConfirmAsync($"Load last saved server profile?\n{lastProfilePath}");
+                if (shouldLoad)
                 {
-                    var shouldLoad = await JS.InvokeAsync<bool>("showConfirm", $"Load last saved server profile?\n{lastProfilePath}");
-                    if (shouldLoad)
-                    {
-                        await Opc.LoadProfileAsync(lastProfilePath);
-                        StateHasChanged();
-                    }
-                }
-                catch
-                {
-                    // JS interop not available in some preview modes – ignore
+                    await Opc.LoadProfileAsync(lastProfilePath);
+                    StateHasChanged();
                 }
             }
         }
@@ -888,20 +882,18 @@
         }
     }
 
+    // Win32-style dialog filters used by the export/profile pickers.
+    private const string CsvFilter = "CSV Files|*.csv";
+    private const string JsonFilter = "JSON Files|*.json";
+    private const string ProfileFilter = "Server Profile (*.json)|*.json|All Files (*.*)|*.*";
+
     private async Task StartRecording()
     {
-        try
-        {
-            var path = await JS.InvokeAsync<string>("showSaveDialog", "CSV Files|*.csv");
-            if (string.IsNullOrEmpty(path))
-                return;
+        var path = await Dialogs.ShowSaveFileDialogAsync(CsvFilter);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
 
-            await Opc.StartRecordingAsync(path);
-        }
-        catch
-        {
-            // JS interop not available in some preview modes – ignore
-        }
+        await Opc.StartRecordingAsync(path);
     }
 
     private async Task StopRecording() => await Opc.StopRecordingAsync();
@@ -919,7 +911,7 @@
     {
         if (string.IsNullOrWhiteSpace(_exportPath))
         {
-            await JS.InvokeVoidAsync("alert", "Please enter an output file path.");
+            await Dialogs.ShowMessageAsync("Please enter an output file path.");
             return;
         }
 
@@ -929,54 +921,32 @@
 
     private async Task BrowseOutputPath()
     {
-        // Use WinForms SaveFileDialog via JS interop shim defined in MainForm
-        try
-        {
-            var path = await JS.InvokeAsync<string>("showSaveDialog",
-                _exportFormat == "Csv" ? "CSV Files|*.csv" : "JSON Files|*.json");
-            if (!string.IsNullOrEmpty(path))
-            {
-                _exportPath = path;
-                StateHasChanged();
-            }
-        }
-        catch
-        {
-            // JS interop not available in some preview modes – ignore
-        }
+        var path = await Dialogs.ShowSaveFileDialogAsync(
+            _exportFormat == "Csv" ? CsvFilter : JsonFilter);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
+
+        _exportPath = path;
+        StateHasChanged();
     }
 
     private async Task SaveServerProfile()
     {
-        try
-        {
-            var path = await JS.InvokeAsync<string>("showSaveDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
-            if (string.IsNullOrWhiteSpace(path))
-                return;
+        var path = await Dialogs.ShowSaveFileDialogAsync(ProfileFilter);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
 
-            await Opc.SaveProfileAsync(path);
-        }
-        catch
-        {
-            // JS interop not available in some preview modes – ignore
-        }
+        await Opc.SaveProfileAsync(path);
     }
 
     private async Task LoadServerProfile()
     {
-        try
-        {
-            var path = await JS.InvokeAsync<string>("showOpenDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
-            if (string.IsNullOrWhiteSpace(path))
-                return;
+        var path = await Dialogs.ShowOpenFileDialogAsync(ProfileFilter);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
 
-            await Opc.LoadProfileAsync(path);
-            StateHasChanged();
-        }
-        catch
-        {
-            // JS interop not available in some preview modes – ignore
-        }
+        await Opc.LoadProfileAsync(path);
+        StateHasChanged();
     }
 
     private void HandleToggle(OpcTag tag)

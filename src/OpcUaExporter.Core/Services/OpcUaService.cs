@@ -8,12 +8,14 @@ using System.IO;
 namespace OpcUaExporter.Services;
 
 /// <summary>
-/// High-level OPC UA service used by Blazor components.
-/// Wraps PythonBridgeService and manages application state.
+/// High-level OPC UA service the Blazor components bind to.
+/// Wraps <see cref="OpcUaClientService"/>, owns the application state
+/// (connection profile, tag tree, readings, recording and trend selection) and
+/// raises <see cref="StateChanged"/> so pages can re-render.
 /// </summary>
 public class OpcUaService
 {
-    private readonly OpcUaClientService _bridge;
+    private readonly OpcUaClientService _client;
     private readonly ILogger<OpcUaService> _logger;
     private readonly DiagnosticsLogService _diagnostics;
     private CancellationTokenSource? _browseCancellation;
@@ -89,25 +91,14 @@ public class OpcUaService
     public int ScanTotalCount { get; private set; }
     public List<DiscoveredServerInfo> DiscoveredServers { get; private set; } = new();
 
-    public OpcUaService(OpcUaClientService bridge, ILogger<OpcUaService> logger, DiagnosticsLogService diagnostics)
+    public OpcUaService(OpcUaClientService client, ILogger<OpcUaService> logger, DiagnosticsLogService diagnostics)
     {
-        _bridge = bridge;
+        _client = client;
         _logger = logger;
         _diagnostics = diagnostics;
     }
 
-    private static string LastProfilePointerPath
-    {
-        get
-        {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OpcUaExporter");
-
-            Directory.CreateDirectory(dir);
-            return Path.Combine(dir, "last-profile.txt");
-        }
-    }
+    private static string LastProfilePointerPath => AppPaths.LastProfilePointerFile;
 
     // -----------------------------------------------------------------------
     // Public operations
@@ -137,7 +128,7 @@ public class OpcUaService
                 TagTree = [];
                 Notify();
 
-                TagTree = await _bridge.BrowseAsync(
+                TagTree = await _client.BrowseAsync(
                     Profile,
                     onTopStructureReady: topTags =>
                     {
@@ -239,7 +230,7 @@ public class OpcUaService
             {
                 SetStatus($"Scanning {description} on {DiscoveryHost}…");
 
-                await _bridge.ScanForServersAsync(
+                await _client.ScanForServersAsync(
                     DiscoveryHost,
                     ports,
                     maxDegreeOfParallelism: 100,
@@ -283,7 +274,7 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus($"Reading {selected.Count} tag(s)…");
-            LastReadings = await _bridge.ReadAsync(Profile, selected, ct);
+            LastReadings = await _client.ReadAsync(Profile, selected, ct);
             RefreshPendingCertificates();
             SetStatus($"Read {LastReadings.Count} tag(s) successfully.");
         });
@@ -571,7 +562,7 @@ public class OpcUaService
         await StopActiveSubscriptionHandleAsync();
 
         var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var (handle, initialReadings) = await _bridge.SubscribeAsync(
+        var (handle, initialReadings) = await _client.SubscribeAsync(
             Profile,
             selected,
             ApplySubscriptionUpdate,
@@ -616,7 +607,7 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus("Testing OPC UA connection…");
-            await _bridge.TestConnectionAsync(Profile, ct);
+            await _client.TestConnectionAsync(Profile, ct);
             RefreshPendingCertificates();
             IsConnected = true;
             SetStatus("Connection test successful.");
@@ -630,7 +621,7 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus("Discovering server capabilities…");
-            result = await _bridge.GetServerCapabilitiesAsync(Profile.EndpointUrl, ct);
+            result = await _client.GetServerCapabilitiesAsync(Profile.EndpointUrl, ct);
             SetStatus($"Discovered capabilities for server '{result.ServerName}'.");
         });
 
@@ -666,7 +657,7 @@ public class OpcUaService
 
         await RunSafe(async () =>
         {
-            var trusted = await _bridge.TrustPendingCertificateAsync(thumbprint, ct);
+            var trusted = await _client.TrustPendingCertificateAsync(thumbprint, ct);
             RefreshPendingCertificates();
             SetStatus(trusted
                 ? "Certificate trusted. Retry browse/read."
@@ -679,7 +670,7 @@ public class OpcUaService
         if (string.IsNullOrWhiteSpace(thumbprint))
             return;
 
-        var rejected = _bridge.RejectPendingCertificate(thumbprint);
+        var rejected = _client.RejectPendingCertificate(thumbprint);
         RefreshPendingCertificates();
         SetStatus(rejected
             ? "Certificate rejected."
@@ -688,7 +679,7 @@ public class OpcUaService
 
     public void RefreshPendingCertificates()
     {
-        PendingCertificates = _bridge.GetPendingCertificates();
+        PendingCertificates = _client.GetPendingCertificates();
         Notify();
     }
 
@@ -795,7 +786,7 @@ public class OpcUaService
         await RunSafe(async () =>
         {
             SetStatus("Reading node properties…");
-            result = await _bridge.GetNodeDetailsAsync(Profile, nodeId, ct);
+            result = await _client.GetNodeDetailsAsync(Profile, nodeId, ct);
             SetStatus($"Loaded properties for '{result.DisplayName}'.");
         });
 
@@ -823,7 +814,7 @@ public class OpcUaService
                     .FirstOrDefault(t => string.Equals(t.NodeId, nodeId, StringComparison.OrdinalIgnoreCase))
                     ?.DataType;
 
-            result = await _bridge.WriteAsync(Profile, nodeId, rawValue, dataTypeHint, ct);
+            result = await _client.WriteAsync(Profile, nodeId, rawValue, dataTypeHint, ct);
 
             if (result.Error is not null)
                 SetStatus($"Write failed: {result.Error}", isError: true);

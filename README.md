@@ -10,29 +10,47 @@ OPC UA communication is handled natively from .NET using the [OPC Foundation's U
 
 ## Architecture
 
+The application is split into three projects, each with a single
+responsibility and a one-way dependency chain:
+
 ```
-┌──────────────────────────────────────────────────────────────┐
-│  WPF Host (MainWindow.xaml)                                  │
-│  ┌──────────────────────────────────────────────────────┐    │
-│  │  BlazorWebView                                        │    │
-│  │  ┌────────────────────────────────────────────────┐  │    │
-│  │  │  Blazor Components (Index.razor, TagNode, ...)  │  │    │
-│  │  │           ↕ DI                                  │  │    │
-│  │  │  OpcUaService  ──►  OpcUaClientService          │  │    │
-│  │  └────────────────────────────────────────────────┘  │    │
-│  └──────────────────────────────────────────────────────┘    │
-└───────────────────────────┬────────────────────────────────-─┘
-                             │ Opc.Ua.Client (OPCFoundation SDK)
-                             ▼
-                      OPC UA Server (network)
+┌───────────────────────────────────────────────────────────────┐
+│  OpcUaExporter.Wpf          (net8.0-windows, WinExe)          │
+│  WPF shell: process lifetime, DI container, crash logging,     │
+│  BlazorWebView host, native dialogs (IFileDialogService)       │
+└───────────────────────────┬───────────────────────────────────┘
+                            │ references
+┌───────────────────────────▼───────────────────────────────────┐
+│  OpcUaExporter.UI           (net8.0, Razor class library)      │
+│  Blazor pages, components and static web assets                │
+│  (served from _content/OpcUaExporter.UI/)                      │
+└───────────────────────────┬───────────────────────────────────┘
+                            │ references
+┌───────────────────────────▼───────────────────────────────────┐
+│  OpcUaExporter.Core         (net8.0, class library)            │
+│  Models, OpcUaService (state) ──► OpcUaClientService (session) │
+│  plus the platform abstractions the UI depends on              │
+└───────────────────────────┬───────────────────────────────────┘
+                            │ Opc.Ua.Client (OPCFoundation SDK)
+                            ▼
+                     OPC UA Server (network)
 ```
+
+Neither `OpcUaExporter.Core` nor `OpcUaExporter.UI` references WPF or any
+Windows-only API, so both build and can be unit tested on any OS. Anything the
+UI needs from the host — currently only native file dialogs and message boxes —
+is expressed as an abstraction in Core (`IFileDialogService`) and implemented by
+the shell (`WpfFileDialogService`). That inverts what used to be a hard
+dependency on static `[JSInvokable]` methods in the WPF window.
 
 ### Key design decisions
 
 | Layer | Technology | Why |
 |---|---|---|
-| UI host | WPF + BlazorWebView | Blazor Hybrid on Windows, native file dialogs, XAML layout |
-| UI components | Razor + CSS | Modern reactive UI, no WinForms designer lock-in |
+| UI host | WPF + BlazorWebView (`OpcUaExporter.Wpf`) | Blazor Hybrid on Windows, native file dialogs, XAML layout |
+| UI components | Razor class library (`OpcUaExporter.UI`) | Modern reactive UI, testable in isolation, no Windows dependency |
+| Domain + services | Class library (`OpcUaExporter.Core`) | OPC UA and application state without a UI framework attached |
+| Platform services | `IFileDialogService` in Core, implemented in the shell | Keeps the UI portable and lets tests substitute a stub |
 | OPC UA client | OPCFoundation.NetStandard.Opc.Ua(.Client/.Configuration) | Official, actively maintained .NET OPC UA SDK — no subprocess, no external runtime to bundle |
 | State | `OpcUaService` singleton | Central façade Blazor components bind to; raises a `StateChanged` event for re-render |
 
@@ -52,12 +70,20 @@ No other setup is required — the OPC UA client library is a standard NuGet dep
 ## Build & Run
 
 ```bash
-cd OpcUaExporter
-dotnet build
-dotnet run
+dotnet build OpcUaExporter.sln
+dotnet run --project src/OpcUaExporter.Wpf
 ```
 
 Or open `OpcUaExporter.sln` in **Visual Studio 2022** and press **F5**.
+
+### Tests
+
+```bash
+dotnet test tests/OpcUaExporter.Tests
+```
+
+The test project targets `net8.0` and references only `OpcUaExporter.Core` and
+`OpcUaExporter.UI`, so it runs on Windows, Linux and macOS alike.
 
 ---
 
@@ -79,46 +105,59 @@ Or open `OpcUaExporter.sln` in **Visual Studio 2022** and press **F5**.
 
 ```
 OpcUaExporter.sln
-OpcUaExporter/
-├── OpcUaExporter.csproj
-├── App.xaml                    ← WPF Application definition (no StartupUri)
-├── App.xaml.cs                 ← DI container setup + OnStartup + global crash logging
-├── MainWindow.xaml              ← WPF Window hosting BlazorWebView
-├── MainWindow.xaml.cs           ← JS-invokable native dialogs (Microsoft.Win32)
+Directory.Build.props                ← properties shared by every project
 │
-├── Models/
-│   └── OpcModels.cs             ← OpcTag, TagReading, ConnectionProfile, NodeDetails,
-│                                   ServerCapabilitiesInfo, DiscoveredServerInfo, ExportOptions, ...
+├── src/
+│   ├── OpcUaExporter.Core/          ← net8.0 · no UI dependency
+│   │   ├── AppPaths.cs              ← every %LocalAppData%\OpcUaExporter\ path
+│   │   ├── ServiceCollectionExtensions.cs  ← AddOpcUaExporterCore()
+│   │   ├── Abstractions/
+│   │   │   ├── IFileDialogService.cs      ← native dialogs the host supplies
+│   │   │   └── NullFileDialogService.cs   ← default: every prompt cancels
+│   │   ├── Models/
+│   │   │   └── OpcModels.cs         ← OpcTag, TagReading, ConnectionProfile, NodeDetails,
+│   │   │                               ServerCapabilitiesInfo, DiscoveredServerInfo, ExportOptions, ...
+│   │   └── Services/
+│   │       ├── OpcUaClientService.cs    ← native OPC UA client: sessions, browse, read/write,
+│   │       │                               subscriptions, endpoint/security discovery, port
+│   │       │                               scanning, certificate trust handling
+│   │       ├── OpcUaService.cs          ← high-level state management for Blazor (façade over
+│   │       │                               OpcUaClientService), recording, trend chart wiring
+│   │       ├── DiagnosticsLogService.cs ← bounded in-memory diagnostic log
+│   │       └── ThemeService.cs          ← light/dark theme, persisted to app-settings.json
+│   │
+│   ├── OpcUaExporter.UI/            ← net8.0 · Razor class library
+│   │   ├── ServiceCollectionExtensions.cs  ← AddOpcUaExporterUi()
+│   │   ├── Components/
+│   │   │   ├── Routes.razor         ← Blazor router (root component)
+│   │   │   ├── _Imports.razor
+│   │   │   ├── AppSidebar.razor
+│   │   │   ├── TagNode.razor        ← recursive tag tree component
+│   │   │   ├── ThemeToggle.razor
+│   │   │   └── Pages/
+│   │   │       ├── Index.razor      ← main page (sidebar + tag tree + readings + export)
+│   │   │       ├── ConnectionSettings.razor
+│   │   │       ├── ServerDiscovery.razor  ← host/port scanning UI
+│   │   │       └── Diagnostics.razor
+│   │   └── wwwroot/                 ← published as _content/OpcUaExporter.UI/
+│   │       ├── css/app.css
+│   │       └── js/
+│   │           ├── resizable-panes.js   ← drag-resize layout panes
+│   │           ├── resizable-columns.js ← drag-resize table columns
+│   │           ├── trend-chart.js       ← live trend chart rendering
+│   │           └── theme.js             ← applies data-theme to the document
+│   │
+│   └── OpcUaExporter.Wpf/           ← net8.0-windows · WinExe (OpcUaExporter.exe)
+│       ├── App.xaml / App.xaml.cs   ← DI container, OnStartup, global crash logging
+│       ├── MainWindow.xaml / .cs    ← WPF Window hosting BlazorWebView
+│       ├── Services/
+│       │   └── WpfFileDialogService.cs  ← IFileDialogService via Microsoft.Win32 dialogs
+│       └── wwwroot/
+│           ├── index.html           ← host page
+│           └── app.ico
 │
-├── Services/
-│   ├── OpcUaClientService.cs    ← native OPC UA client: sessions, browse, read/write,
-│   │                               subscriptions, endpoint/security discovery, port scanning,
-│   │                               certificate trust handling
-│   ├── OpcUaService.cs          ← high-level state management for Blazor (façade over
-│   │                               OpcUaClientService), recording, trend chart wiring
-│   ├── DiagnosticsLogService.cs ← bounded in-memory diagnostic log
-│   └── ThemeService.cs          ← light/dark theme, persisted to app-settings.json
-│
-├── Components/
-│   ├── App.razor
-│   ├── _Imports.razor
-│   ├── TagNode.razor            ← recursive tag tree component
-│   ├── ThemeToggle.razor
-│   └── Pages/
-│       ├── Index.razor          ← main page (sidebar + tag tree + readings + export)
-│       ├── ConnectionSettings.razor
-│       ├── ServerDiscovery.razor← host/port scanning UI
-│       └── Diagnostics.razor
-│
-└── wwwroot/
-    ├── index.html
-    ├── app.ico
-    ├── css/
-    │   └── app.css
-    └── js/
-        ├── resizable-panes.js   ← drag-resize layout panes
-        ├── resizable-columns.js ← drag-resize table columns
-        └── trend-chart.js       ← live trend chart rendering
+└── tests/
+    └── OpcUaExporter.Tests/         ← net8.0 · xUnit
 ```
 
 ---
@@ -134,7 +173,7 @@ Supported authentication: Anonymous and Username/Password. Security mode/policy 
 ## Publishing
 
 ```bash
-dotnet publish -c Release -r win-x64 --self-contained true
+dotnet publish src/OpcUaExporter.Wpf -c Release -r win-x64 --self-contained true
 ```
 
 The published output is self-contained — there is no separate runtime folder to copy alongside it.

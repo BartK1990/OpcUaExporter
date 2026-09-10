@@ -2,7 +2,7 @@
 @using OpcUaExporter.Models
 @using OpcUaExporter.Services
 @inject OpcUaService Opc
-@inject IJSRuntime JS
+@inject IFileDialogService Dialogs
 @implements IDisposable
 
 <div class="app-shell">
@@ -195,20 +195,15 @@
             StateHasChanged();
     }
 
+    private const string ProfileFilter = "Server Profile (*.json)|*.json|All Files (*.*)|*.*";
+
     private async Task SaveServerProfile()
     {
-        try
-        {
-            var path = await JS.InvokeAsync<string>("showSaveDialog", "Server Profile (*.json)|*.json|All Files (*.*)|*.*");
-            if (string.IsNullOrWhiteSpace(path))
-                return;
+        var path = await Dialogs.ShowSaveFileDialogAsync(ProfileFilter);
+        if (string.IsNullOrWhiteSpace(path))
+            return;
 
-            await Opc.SaveProfileAsync(path);
-        }
-        catch
-        {
-            // JS interop not available in some preview modes – ignore
-        }
+        await Opc.SaveProfileAsync(path);
     }
 
     private void OnServiceStateChanged()

@@ -55,16 +55,19 @@ jobs:
       - name: Restore
         run: dotnet restore "${{ github.workspace }}/OpcUaExporter.sln"
 
+      - name: Test
+        run: dotnet test "${{ github.workspace }}/tests/OpcUaExporter.Tests/OpcUaExporter.Tests.csproj" -c Release --no-restore
+
       - name: Publish portable
         run: >
-          dotnet publish "${{ github.workspace }}/OpcUaExporter/OpcUaExporter.csproj"
+          dotnet publish "${{ github.workspace }}/src/OpcUaExporter.Wpf/OpcUaExporter.Wpf.csproj"
           -c Release
           --self-contained false
           -o "${{ github.workspace }}/artifacts/portable"
 
       - name: Publish win_x64
         run: >
-          dotnet publish "${{ github.workspace }}/OpcUaExporter/OpcUaExporter.csproj"
+          dotnet publish "${{ github.workspace }}/src/OpcUaExporter.Wpf/OpcUaExporter.Wpf.csproj"
           -c Release
           -r win-x64
           --self-contained false
@@ -72,7 +75,7 @@ jobs:
 
       - name: Publish self-contained
         run: >
-          dotnet publish "${{ github.workspace }}/OpcUaExporter/OpcUaExporter.csproj"
+          dotnet publish "${{ github.workspace }}/src/OpcUaExporter.Wpf/OpcUaExporter.Wpf.csproj"
           -c Release
           -r win-x64
           --self-contained true
