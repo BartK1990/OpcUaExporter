@@ -1,0 +1,14 @@
+<Project>
+
+  <!--
+    Properties shared by every project in the repository.
+    Project-specific settings (target framework moniker, output type, packages)
+    stay in the individual .csproj files.
+  -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

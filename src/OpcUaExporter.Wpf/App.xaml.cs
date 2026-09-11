@@ -2,17 +2,20 @@ using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Extensions.DependencyInjection;
+using OpcUaExporter.Abstractions;
 using OpcUaExporter.Services;
+using OpcUaExporter.UI;
 
 namespace OpcUaExporter;
 
 /// <summary>
-/// WPF application entry point.
-/// Builds the DI container and launches the main window.
+/// WPF application entry point: builds the DI container the Blazor UI resolves
+/// its services from, installs the global crash handlers, and shows the shell
+/// window.
 /// </summary>
 public partial class App : Application
 {
-    public static IServiceProvider Services { get; private set; } = null!;
+    private IServiceProvider? _services;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -22,21 +25,43 @@ public partial class App : Application
         AppDomain.CurrentDomain.UnhandledException += OnAppDomainUnhandledException;
         TaskScheduler.UnobservedTaskException += OnUnobservedTaskException;
 
-        var serviceCollection = new ServiceCollection();
+        _services = BuildServiceProvider();
 
-        serviceCollection.AddWpfBlazorWebView();
-        serviceCollection.AddLogging();
+        new MainWindow(_services).Show();
+    }
 
-        // Application services — singletons so Blazor components share state
-        serviceCollection.AddSingleton<DiagnosticsLogService>();
-        serviceCollection.AddSingleton<OpcUaClientService>();
-        serviceCollection.AddSingleton<OpcUaService>();
-        serviceCollection.AddSingleton<ThemeService>();
+    protected override void OnExit(ExitEventArgs e)
+    {
+        try
+        {
+            (_services as IDisposable)?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            // The process is going away regardless; a failed cleanup must not
+            // turn a clean exit into a crash dialog.
+            LogCrash("shutdown", ex);
+        }
 
-        Services = serviceCollection.BuildServiceProvider();
+        base.OnExit(e);
+    }
 
-        var mainWindow = new MainWindow(Services);
-        mainWindow.Show();
+    private static IServiceProvider BuildServiceProvider()
+    {
+        var services = new ServiceCollection();
+
+        services.AddWpfBlazorWebView();
+        services.AddLogging();
+
+        // Platform services first: AddOpcUaExporterUi only fills in the
+        // abstractions the host has not already supplied.
+        services.AddSingleton<IFileDialogService, WpfFileDialogService>();
+
+        // Application + UI services. All singletons, so every Blazor page
+        // observes the same connection, tag tree and subscription.
+        services.AddOpcUaExporterUi();
+
+        return services.BuildServiceProvider();
     }
 
     // Exceptions raised on the UI (dispatcher) thread, e.g. while marshalling a
@@ -66,11 +91,9 @@ public partial class App : Application
     {
         try
         {
-            var logPath = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OpcUaExporter", "crash.log");
-            Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
-            File.AppendAllText(logPath, $"[{DateTime.Now:O}] Unhandled exception on {source}:{Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}");
+            File.AppendAllText(
+                AppPaths.CrashLogFile,
+                $"[{DateTime.Now:O}] Unhandled exception on {source}:{Environment.NewLine}{ex}{Environment.NewLine}{Environment.NewLine}");
         }
         catch
         {

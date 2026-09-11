@@ -796,12 +796,27 @@ public class OpcUaClientService
         try
         {
             var cert = new X509Certificate2(endpoint.ServerCertificate);
-            _diagnostics.Add($"Endpoint server certificate: Subject='{cert.Subject}', Issuer='{cert.Issuer}', Thumbprint={cert.Thumbprint}, KeySize={cert.PublicKey?.Key?.KeySize}");
+            _diagnostics.Add($"Endpoint server certificate: Subject='{cert.Subject}', Issuer='{cert.Issuer}', Thumbprint={cert.Thumbprint}, KeySize={DescribePublicKeySize(cert)}");
         }
         catch (Exception ex)
         {
             _diagnostics.Add($"Endpoint server certificate parse warning: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Public key size of <paramref name="certificate"/>, for diagnostics.
+    /// Uses the per-algorithm accessors rather than the obsolete
+    /// <c>PublicKey.Key</c>, which only ever understood RSA and DSA.
+    /// </summary>
+    private static string DescribePublicKeySize(X509Certificate2 certificate)
+    {
+        using var rsa = certificate.GetRSAPublicKey();
+        if (rsa is not null)
+            return rsa.KeySize.ToString();
+
+        using var ecdsa = certificate.GetECDsaPublicKey();
+        return ecdsa is not null ? ecdsa.KeySize.ToString() : "unknown";
     }
 
     private async Task LogClientCertificateDiagnosticsAsync(ApplicationConfiguration config)
@@ -916,10 +931,7 @@ public class OpcUaClientService
 
     private async Task<ApplicationConfiguration> BuildConfigurationAsync()
     {
-        var pkiRoot = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "OpcUaExporter",
-            "pki");
+        var pkiRoot = AppPaths.PkiDirectory;
 
         var trustedPeerStorePath = Path.Combine(pkiRoot, "trusted");
         var trustedIssuerStorePath = Path.Combine(pkiRoot, "issuer");

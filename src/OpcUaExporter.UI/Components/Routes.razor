@@ -1,0 +1,14 @@
+@*
+    Root Blazor component: resolves the current URI to one of the @page
+    components in this assembly. Named Routes rather than App so it is not
+    confused with the WPF System.Windows.Application subclass that owns the
+    process.
+*@
+<Router AppAssembly="@typeof(Routes).Assembly">
+    <Found Context="routeData">
+        <RouteView RouteData="@routeData" />
+    </Found>
+    <NotFound>
+        <p>Page not found.</p>
+    </NotFound>
+</Router>

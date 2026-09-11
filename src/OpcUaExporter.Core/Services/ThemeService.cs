@@ -29,18 +29,7 @@ public class ThemeService
     public AppTheme Theme { get; private set; } = AppTheme.Dark;
     public bool CompactSelectedRows { get; private set; }
 
-    private static string SettingsPath
-    {
-        get
-        {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OpcUaExporter");
-
-            Directory.CreateDirectory(dir);
-            return Path.Combine(dir, "app-settings.json");
-        }
-    }
+    private static string SettingsPath => AppPaths.SettingsFile;
 
     public ThemeService()
     {

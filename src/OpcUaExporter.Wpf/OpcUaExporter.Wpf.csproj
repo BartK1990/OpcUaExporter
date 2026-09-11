@@ -1,30 +1,34 @@
 <Project Sdk="Microsoft.NET.Sdk.Razor">
 
+  <!--
+    Windows shell for the application. Owns the process lifetime, the WPF
+    window that hosts the BlazorWebView, and the platform-specific services
+    (native file dialogs, message boxes) the UI layer consumes via
+    abstractions declared in OpcUaExporter.Core.
+
+    Keeps AssemblyName "OpcUaExporter" so the published executable stays
+    OpcUaExporter.exe (referenced by the MSIX manifest in CI).
+  -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows</TargetFramework>
-    <Nullable>enable</Nullable>
     <UseWPF>true</UseWPF>
-    <ApplicationIcon>wwwroot/app.ico</ApplicationIcon>
-    <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>OpcUaExporter</RootNamespace>
     <AssemblyName>OpcUaExporter</AssemblyName>
-    <!-- Required so WPF builds alongside Razor without conflict -->
     <StartupObject>OpcUaExporter.App</StartupObject>
+    <ApplicationIcon>wwwroot\app.ico</ApplicationIcon>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Components.WebView.Wpf" Version="8.0.*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" Version="8.0.*" />
-    <PackageReference Include="CsvHelper" Version="33.*" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.*" />
-    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.5.*" />
-    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Client" Version="1.5.*" />
-    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Configuration" Version="1.5.*" />
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\OpcUaExporter.UI\OpcUaExporter.UI.csproj" />
+  </ItemGroup>
 
+  <ItemGroup>
     <Content Update="wwwroot\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

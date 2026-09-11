@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Domain models and application services: OPC UA session handling, browsing,
+    reading/writing, subscriptions, export and diagnostics.
+    Deliberately free of any UI (WPF, Blazor, WebView) dependency so it can be
+    referenced from a test project and hosted from any front end.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>OpcUaExporter</RootNamespace>
+    <AssemblyName>OpcUaExporter.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CsvHelper" Version="33.*" />
+    <!-- Version matched to what the OPC UA SDK already pulls in, so the
+         restore graph has no downgrade to resolve. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.5.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Client" Version="1.5.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Configuration" Version="1.5.*" />
+  </ItemGroup>
+
+</Project>
