@@ -1,17 +1,12 @@
-﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.0.31903.59
+# Visual Studio Version 18
+VisualStudioVersion = 18.9.12128.139 oobstable
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{F9BE01A6-AB55-49B8-8AC5-36F264ADDB8C}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpcUaExporter.Core", "src\OpcUaExporter.Core\OpcUaExporter.Core.csproj", "{81B214AD-1172-4F36-8439-43AE56398D0B}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpcUaExporter.UI", "src\OpcUaExporter.UI\OpcUaExporter.UI.csproj", "{EEC4F172-DB2D-4609-951D-C4CE13F7C345}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpcUaExporter.Wpf", "src\OpcUaExporter.Wpf\OpcUaExporter.Wpf.csproj", "{946F18DE-49D4-4899-AF69-6695203BB149}"
-EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{9AA57AE9-15B1-4B80-BC61-4DE949303DAE}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpcUaExporter.Tests", "tests\OpcUaExporter.Tests\OpcUaExporter.Tests.csproj", "{1901F0AB-EB9E-4313-90C7-8EB0EE28342E}"
 EndProject
@@ -19,9 +14,6 @@ Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
 		Release|Any CPU = Release|Any CPU
-	EndGlobalSection
-	GlobalSection(SolutionProperties) = preSolution
-		HideSolutionNode = FALSE
 	EndGlobalSection
 	GlobalSection(ProjectConfigurationPlatforms) = postSolution
 		{81B214AD-1172-4F36-8439-43AE56398D0B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
@@ -41,10 +33,7 @@ Global
 		{1901F0AB-EB9E-4313-90C7-8EB0EE28342E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1901F0AB-EB9E-4313-90C7-8EB0EE28342E}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
-	GlobalSection(NestedProjects) = preSolution
-		{81B214AD-1172-4F36-8439-43AE56398D0B} = {F9BE01A6-AB55-49B8-8AC5-36F264ADDB8C}
-		{EEC4F172-DB2D-4609-951D-C4CE13F7C345} = {F9BE01A6-AB55-49B8-8AC5-36F264ADDB8C}
-		{946F18DE-49D4-4899-AF69-6695203BB149} = {F9BE01A6-AB55-49B8-8AC5-36F264ADDB8C}
-		{1901F0AB-EB9E-4313-90C7-8EB0EE28342E} = {9AA57AE9-15B1-4B80-BC61-4DE949303DAE}
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
 	EndGlobalSection
 EndGlobal
