@@ -408,6 +408,15 @@ public class OpcUaService
                 IsRecording = true;
                 _recordingNodeIds = selected.ToList();
                 _recordingLatestByNodeId.Clear();
+
+                // Seed from the values the live subscription already knows: a tag that rarely
+                // changes may not produce another notification for a long time, and its column
+                // would otherwise stay a placeholder for the whole file.
+                foreach (var reading in LastReadings)
+                {
+                    if (selectedSet.Contains(reading.NodeId))
+                        _recordingLatestByNodeId[reading.NodeId] = reading;
+                }
             }
 
             SetStatus($"Recording selected tags to: {filePath}");
