@@ -89,6 +89,7 @@
                 <select class="field-input" @bind="_exportFormat">
                     <option value="Csv">CSV (.csv)</option>
                     <option value="Json">JSON (.json)</option>
+                    <option value="Xlsx">Excel (.xlsx)</option>
                 </select>
 
                 <label class="field-label">Output Path</label>
@@ -885,6 +886,7 @@
     // Win32-style dialog filters used by the export/profile pickers.
     private const string CsvFilter = "CSV Files|*.csv";
     private const string JsonFilter = "JSON Files|*.json";
+    private const string XlsxFilter = "Excel Files|*.xlsx";
     private const string ProfileFilter = "Server Profile (*.json)|*.json|All Files (*.*)|*.*";
 
     private async Task StartRecording()
@@ -921,8 +923,13 @@
 
     private async Task BrowseOutputPath()
     {
-        var path = await Dialogs.ShowSaveFileDialogAsync(
-            _exportFormat == "Csv" ? CsvFilter : JsonFilter);
+        var filter = _exportFormat switch
+        {
+            "Json" => JsonFilter,
+            "Xlsx" => XlsxFilter,
+            _ => CsvFilter
+        };
+        var path = await Dialogs.ShowSaveFileDialogAsync(filter);
         if (string.IsNullOrWhiteSpace(path))
             return;
 

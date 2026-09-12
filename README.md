@@ -1,6 +1,6 @@
 # OPC UA Exporter
 
-A Windows desktop application built with **Blazor Hybrid (WPF)** that connects to OPC UA servers, browses their tag trees, reads/writes/subscribes to live values, and exports selected tags to CSV or JSON.
+A Windows desktop application built with **Blazor Hybrid (WPF)** that connects to OPC UA servers, browses their tag trees, reads/writes/subscribes to live values, and exports selected tags to CSV, JSON, or Excel (.xlsx).
 
 OPC UA communication is handled natively from .NET using the [OPC Foundation's UA-.NETStandard](https://github.com/OPCFoundation/UA-.NETStandard) client SDK — no external runtime or subprocess is involved.
 
@@ -95,7 +95,7 @@ The test project targets `net8.0` and references only `OpcUaExporter.Core` and
 4. **Check** the tags you want (or use All / None / per-folder shortcuts).
 5. Click **Read Values** for a one-off read, or **Subscribe** to get live updates pushed into the readings table.
 6. With a live subscription active, optionally **record** updates to a CSV file and/or plot selected tags on the **live trend chart**.
-7. Choose a **format** (CSV or JSON), enter or browse for an **output path**, and click **Export Selected**.
+7. Choose a **format** (CSV, JSON, or Excel), enter or browse for an **output path**, and click **Export Selected**.
 8. If the server presents an untrusted certificate, it appears in the sidebar for you to **Trust** or **Reject** before retrying the connection.
 9. Check the **Diagnostics** page for a running log of connection/browse/read/subscribe activity.
 

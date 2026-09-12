@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using OfficeIMO.Excel;
 using OpcUaExporter.Models;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -962,6 +963,10 @@ public class OpcUaService
                 await File.WriteAllTextAsync(options.OutputPath, json, ct);
                 break;
 
+            case ExportFormat.Xlsx:
+                await Task.Run(() => WriteXlsx(options.OutputPath, rows), ct);
+                break;
+
             case ExportFormat.Csv:
             default:
                 var csv = BuildCsv(rows);
@@ -970,6 +975,26 @@ public class OpcUaService
         }
 
         return options.OutputPath;
+    }
+
+    private static void WriteXlsx(string path, List<TagReading> rows)
+    {
+        using var document = ExcelDocument.Create(path, "Tags");
+        var sheet = document.Sheets[0];
+
+        sheet.CellValue(1, 1, "Display Name");
+        sheet.CellValue(1, 2, "Node ID");
+        sheet.CellValue(1, 3, "Data Type");
+
+        for (var i = 0; i < rows.Count; i++)
+        {
+            var row = i + 2;
+            sheet.CellValue(row, 1, rows[i].DisplayName);
+            sheet.CellValue(row, 2, rows[i].NodeId);
+            sheet.CellValue(row, 3, rows[i].DataType ?? string.Empty);
+        }
+
+        document.Save();
     }
 
     private static string BuildCsv(IEnumerable<TagReading> rows)
