@@ -32,6 +32,8 @@ Or open `OpcUaExporter.sln` in Visual Studio 2022 and press F5.
 
 The unit tests cover only the platform-independent pieces (models, the diagnostics buffer, path layout, DI wiring). Anything touching a live OPC UA session or the WebView still has to be verified by running the app and exercising the relevant page (see "UI structure" below).
 
+**`OpcUaExporter.Wpf` is `net8.0-windows` and cannot build on Linux (including cloud/CI sessions without Windows) — `dotnet build OpcUaExporter.sln` will always fail there on that project.** In a non-Windows session, build/test `OpcUaExporter.Core`, `OpcUaExporter.UI`, and `tests/OpcUaExporter.Tests` individually instead of the whole solution, and don't try to "fix" the Wpf build failure — it's expected and unrelated to code correctness.
+
 ## Architecture
 
 ```
