@@ -90,7 +90,7 @@ The test project targets `net8.0` and references only `OpcUaExporter.Core` and
 ## Usage
 
 1. **Enter the server endpoint URL** (e.g. `opc.tcp://192.168.1.10:4840`) on the Tag Browser sidebar, or use **Discover Servers** to scan a host's ports for OPC UA endpoints.
-2. Configure security mode/policy and authentication (anonymous or username/password) under **Connection Settings**, and save the profile for reuse.
+2. Configure security mode/policy and authentication (anonymous or username/password) under **Connection Settings**, and click **Save** to add the profile to your saved-profiles library (a **Profile** dropdown appears once you have one, so you can switch between multiple servers — production, test, different machines/lines — without re-entering settings each time). **New**/**Duplicate**/**Delete** manage the library, and **Export…**/**Import…** move a single profile to/from an arbitrary file.
 3. Click **Browse Tags** — the address space tree loads in the tag browser (top-level structure appears first, then the tree fills in as the deep scan continues; scanning can run in parallel — see `ConnectionProfile.EnableParallelBrowse`).
 4. **Check** the tags you want (or use All / None / per-folder shortcuts).
 5. Click **Read Values** for a one-off read, or **Subscribe** to get live updates pushed into the readings table.

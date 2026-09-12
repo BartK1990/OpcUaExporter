@@ -24,6 +24,17 @@
                 <section class="panel settings-panel">
                     <h3 class="panel-title">Endpoint</h3>
 
+                    @if (Opc.SavedProfiles.Count > 0)
+                    {
+                        <label class="field-label">Profile</label>
+                        <select class="field-input" value="@Opc.Profile.Id" @onchange="OnProfileSelected">
+                            @foreach (var p in Opc.SavedProfiles)
+                            {
+                                <option value="@p.Id">@p.Name</option>
+                            }
+                        </select>
+                    }
+
                     <label class="field-label">Server Name</label>
                     <input class="field-input" @bind="Opc.Profile.Name" />
 
@@ -106,8 +117,12 @@
             <section class="panel settings-panel" style="margin-top: 12px;">
                 <h3 class="panel-title">Connection Check</h3>
                 <div class="btn-row">
-                    <button class="btn btn-ghost" @onclick="SaveServerProfile" disabled="@Opc.IsBusy">
+                    <button class="btn btn-ghost" @onclick="SaveProfile" disabled="@Opc.IsBusy">
                         <span>Save Profile</span>
+                    </button>
+
+                    <button class="btn btn-ghost" @onclick="ExportServerProfile" disabled="@Opc.IsBusy">
+                        <span>Export…</span>
                     </button>
 
                     <button class="btn btn-secondary" @onclick="DiscoverCapabilities" disabled="@(Opc.IsBusy || string.IsNullOrWhiteSpace(Opc.Profile.EndpointUrl))">
@@ -197,13 +212,22 @@
 
     private const string ProfileFilter = "Server Profile (*.json)|*.json|All Files (*.*)|*.*";
 
-    private async Task SaveServerProfile()
+    private Task OnProfileSelected(ChangeEventArgs e)
+    {
+        if (e.Value is string s && Guid.TryParse(s, out var id))
+            Opc.SelectProfile(id);
+        return Task.CompletedTask;
+    }
+
+    private async Task SaveProfile() => await Opc.SaveActiveProfileAsync();
+
+    private async Task ExportServerProfile()
     {
         var path = await Dialogs.ShowSaveFileDialogAsync(ProfileFilter);
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        await Opc.SaveProfileAsync(path);
+        await Opc.ExportProfileAsync(path);
     }
 
     private void OnServiceStateChanged()

@@ -23,7 +23,8 @@ public class AppPathsTests
         AppPaths.PkiDirectory,
         AppPaths.CrashLogFile,
         AppPaths.SettingsFile,
-        AppPaths.LastProfilePointerFile
+        AppPaths.ProfilesDirectory,
+        AppPaths.ActiveProfileIdFile
     ];
 
     [Theory]

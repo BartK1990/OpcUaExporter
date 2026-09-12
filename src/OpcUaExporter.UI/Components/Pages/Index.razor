@@ -38,6 +38,17 @@
         <section class="panel">
             <h3 class="panel-title">Server Connection</h3>
 
+            @if (Opc.SavedProfiles.Count > 0)
+            {
+                <label class="field-label">Profile</label>
+                <select class="field-input" value="@Opc.Profile.Id" @onchange="OnProfileSelected" disabled="@Opc.IsBusy">
+                    @foreach (var p in Opc.SavedProfiles)
+                    {
+                        <option value="@p.Id">@p.Name</option>
+                    }
+                </select>
+            }
+
             <label class="field-label">Server Name</label>
             <input class="field-input" @bind="Opc.Profile.Name" placeholder="My PLC" />
 
@@ -64,8 +75,14 @@
             }
 
             <div class="btn-row">
-                <button class="btn btn-ghost" @onclick="SaveServerProfile" disabled="@Opc.IsBusy">Save Profile</button>
-                <button class="btn btn-ghost" @onclick="LoadServerProfile" disabled="@Opc.IsBusy">Load Profile</button>
+                <button class="btn btn-ghost" @onclick="SaveProfile" disabled="@Opc.IsBusy">Save</button>
+                <button class="btn btn-ghost" @onclick="AddProfile" disabled="@Opc.IsBusy">New</button>
+                <button class="btn btn-ghost" @onclick="DuplicateProfile" disabled="@(Opc.IsBusy || Opc.SavedProfiles.Count == 0)">Duplicate</button>
+                <button class="btn btn-ghost" @onclick="DeleteProfile" disabled="@(Opc.IsBusy || Opc.SavedProfiles.Count == 0)">Delete</button>
+            </div>
+            <div class="btn-row">
+                <button class="btn btn-ghost" @onclick="ExportServerProfile" disabled="@Opc.IsBusy">Export…</button>
+                <button class="btn btn-ghost" @onclick="ImportServerProfile" disabled="@Opc.IsBusy">Import…</button>
             </div>
         </section>
 
@@ -529,8 +546,6 @@
 }
 
 @code {
-    private static bool _startupProfilePromptShown;
-
     private static readonly string[] Palette =
         ["#f0a030", "#60a8f0", "#3ecf8e", "#f06060", "#c060f0", "#f0e060", "#60f0d0", "#f08060"];
 
@@ -681,22 +696,6 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (firstRender && !_startupProfilePromptShown)
-        {
-            _startupProfilePromptShown = true;
-
-            var lastProfilePath = Opc.GetExistingLastProfilePath();
-            if (!string.IsNullOrWhiteSpace(lastProfilePath))
-            {
-                var shouldLoad = await Dialogs.ConfirmAsync($"Load last saved server profile?\n{lastProfilePath}");
-                if (shouldLoad)
-                {
-                    await Opc.LoadProfileAsync(lastProfilePath);
-                    StateHasChanged();
-                }
-            }
-        }
-
         if (Opc.IsChartVisible)
         {
             if (!_chartJsInitialized)
@@ -937,22 +936,44 @@
         StateHasChanged();
     }
 
-    private async Task SaveServerProfile()
+    private Task OnProfileSelected(ChangeEventArgs e)
+    {
+        if (e.Value is string s && Guid.TryParse(s, out var id))
+            Opc.SelectProfile(id);
+        return Task.CompletedTask;
+    }
+
+    private async Task AddProfile() => await Opc.AddProfileAsync();
+
+    private async Task DuplicateProfile() => await Opc.DuplicateProfileAsync(Opc.Profile.Id);
+
+    private async Task DeleteProfile()
+    {
+        var confirmed = await Dialogs.ConfirmAsync($"Delete profile '{Opc.Profile.Name}'? This cannot be undone.");
+        if (!confirmed)
+            return;
+
+        await Opc.DeleteProfileAsync(Opc.Profile.Id);
+    }
+
+    private async Task SaveProfile() => await Opc.SaveActiveProfileAsync();
+
+    private async Task ExportServerProfile()
     {
         var path = await Dialogs.ShowSaveFileDialogAsync(ProfileFilter);
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        await Opc.SaveProfileAsync(path);
+        await Opc.ExportProfileAsync(path);
     }
 
-    private async Task LoadServerProfile()
+    private async Task ImportServerProfile()
     {
         var path = await Dialogs.ShowOpenFileDialogAsync(ProfileFilter);
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        await Opc.LoadProfileAsync(path);
+        await Opc.ImportProfileAsync(path);
         StateHasChanged();
     }
 
