@@ -138,4 +138,4 @@ public enum AuthenticationType
     UsernamePassword
 }
 
-public enum ExportFormat { Csv, Json }
+public enum ExportFormat { Csv, Json, Xlsx }
