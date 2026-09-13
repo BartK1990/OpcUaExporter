@@ -74,6 +74,8 @@ public class TagReading
 /// <summary>Connection settings for an OPC UA server.</summary>
 public class ConnectionProfile
 {
+    /// <summary>Stable identity within the saved-profiles library; independent of <see cref="Name"/> so renaming a profile doesn't lose track of it.</summary>
+    public Guid Id { get; set; } = Guid.NewGuid();
     public string Name        { get; set; } = "New Server";
     public string EndpointUrl { get; set; } = "opc.tcp://localhost:4840";
     public ConnectionSecurityMode SecurityMode { get; set; } = ConnectionSecurityMode.None;

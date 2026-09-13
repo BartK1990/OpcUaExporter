@@ -47,6 +47,9 @@ public class OpcUaService
     public ConnectionProfile Profile     { get; private set; } = new();
     public bool               IsConnected { get; private set; }
 
+    /// <summary>Every connection profile saved to the library (<see cref="AppPaths.ProfilesDirectory"/>), sorted by name. The user switches between servers by picking one of these at runtime instead of editing <see cref="Profile"/> from scratch each time.</summary>
+    public List<ConnectionProfile> SavedProfiles { get; private set; } = new();
+
     // Browse tree
     public List<OpcTag> TagTree          { get; private set; } = new();
     public int BrowsedVariableCount { get; private set; }
@@ -97,9 +100,10 @@ public class OpcUaService
         _client = client;
         _logger = logger;
         _diagnostics = diagnostics;
-    }
 
-    private static string LastProfilePointerPath => AppPaths.LastProfilePointerFile;
+        LoadSavedProfiles();
+        RestoreActiveProfile();
+    }
 
     // -----------------------------------------------------------------------
     // Public operations
@@ -109,6 +113,19 @@ public class OpcUaService
     {
         Profile = profile;
         Notify();
+    }
+
+    /// <summary>Switches the active connection to a different saved profile, so the user can move between servers without re-entering settings.</summary>
+    public bool SelectProfile(Guid id)
+    {
+        var match = SavedProfiles.FirstOrDefault(p => p.Id == id);
+        if (match is null)
+            return false;
+
+        Profile = match;
+        PersistActiveProfileId(match.Id);
+        Notify();
+        return true;
     }
 
     public async Task BrowseAsync(CancellationToken ct = default)
@@ -693,62 +710,199 @@ public class OpcUaService
         Notify();
     }
 
-    public async Task SaveProfileAsync(string filePath, CancellationToken ct = default)
+    /// <summary>Adds a brand-new profile to the library with default settings and makes it active.</summary>
+    public async Task AddProfileAsync(string name = "New Server", CancellationToken ct = default)
     {
         await RunSafe(async () =>
         {
-            SetStatus("Saving server profile…");
+            var profile = new ConnectionProfile { Name = string.IsNullOrWhiteSpace(name) ? "New Server" : name };
+            await PersistProfileFileAsync(profile, ct);
 
-            var profile = new ConnectionProfile
-            {
-                Name = Profile.Name,
-                EndpointUrl = Profile.EndpointUrl,
-                SecurityMode = Profile.SecurityMode,
-                SecurityPolicy = Profile.SecurityPolicy,
-                AuthenticationType = Profile.AuthenticationType,
-                Username = Profile.Username,
-                Password = Profile.Password
-            };
+            SavedProfiles = SavedProfiles.Append(profile).OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            Profile = profile;
+            PersistActiveProfileId(profile.Id);
 
-            var json = JsonSerializer.Serialize(profile, new JsonSerializerOptions
-            {
-                WriteIndented = true
-            });
-
-            await File.WriteAllTextAsync(filePath, json, ct);
-            SaveLastProfilePath(filePath);
-
-            SetStatus($"Profile saved: {filePath}");
+            SetStatus($"Created profile '{profile.Name}'.");
         });
     }
 
-    public async Task LoadProfileAsync(string filePath, CancellationToken ct = default)
+    /// <summary>Persists the current in-memory <see cref="Profile"/> (including any edits made to its fields) into the library, adding it if it isn't there yet.</summary>
+    public async Task SaveActiveProfileAsync(CancellationToken ct = default)
     {
         await RunSafe(async () =>
         {
-            SetStatus("Loading server profile…");
+            await PersistProfileFileAsync(Profile, ct);
+
+            if (!SavedProfiles.Any(p => p.Id == Profile.Id))
+                SavedProfiles.Add(Profile);
+            SavedProfiles = SavedProfiles.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+
+            PersistActiveProfileId(Profile.Id);
+            SetStatus($"Profile '{Profile.Name}' saved.");
+        });
+    }
+
+    /// <summary>Clones a saved profile under a new name and makes the copy active, so a similar server can be set up without retyping everything.</summary>
+    public async Task DuplicateProfileAsync(Guid id, CancellationToken ct = default)
+    {
+        var source = SavedProfiles.FirstOrDefault(p => p.Id == id);
+        if (source is null)
+            return;
+
+        await RunSafe(async () =>
+        {
+            var copy = new ConnectionProfile
+            {
+                Name = $"{source.Name} (Copy)",
+                EndpointUrl = source.EndpointUrl,
+                SecurityMode = source.SecurityMode,
+                SecurityPolicy = source.SecurityPolicy,
+                AuthenticationType = source.AuthenticationType,
+                Username = source.Username,
+                Password = source.Password,
+                EnableParallelBrowse = source.EnableParallelBrowse,
+                ParallelBrowseMaxDegree = source.ParallelBrowseMaxDegree
+            };
+
+            await PersistProfileFileAsync(copy, ct);
+            SavedProfiles = SavedProfiles.Append(copy).OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            Profile = copy;
+            PersistActiveProfileId(copy.Id);
+
+            SetStatus($"Duplicated profile as '{copy.Name}'.");
+        });
+    }
+
+    /// <summary>Removes a profile from the library. If it was the active one, another saved profile (or a fresh default) takes its place.</summary>
+    public Task DeleteProfileAsync(Guid id)
+    {
+        var match = SavedProfiles.FirstOrDefault(p => p.Id == id);
+        if (match is null)
+            return Task.CompletedTask;
+
+        var path = ProfileFilePath(match.Id);
+        if (File.Exists(path))
+            File.Delete(path);
+
+        SavedProfiles = SavedProfiles.Where(p => p.Id != id).ToList();
+
+        if (Profile.Id == id)
+        {
+            Profile = SavedProfiles.FirstOrDefault() ?? new ConnectionProfile();
+            if (SavedProfiles.Count > 0)
+                PersistActiveProfileId(Profile.Id);
+            else if (File.Exists(AppPaths.ActiveProfileIdFile))
+                File.Delete(AppPaths.ActiveProfileIdFile);
+        }
+
+        SetStatus($"Deleted profile '{match.Name}'.");
+        Notify();
+        return Task.CompletedTask;
+    }
+
+    /// <summary>Writes the active profile out to an arbitrary file, e.g. to back it up or hand it to another machine.</summary>
+    public async Task ExportProfileAsync(string filePath, CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Exporting server profile…");
+
+            var json = JsonSerializer.Serialize(Profile, new JsonSerializerOptions { WriteIndented = true });
+            await File.WriteAllTextAsync(filePath, json, ct);
+
+            SetStatus($"Profile exported: {filePath}");
+        });
+    }
+
+    /// <summary>Reads a profile from an arbitrary file and adds it to the library as a new entry, then makes it active.</summary>
+    public async Task ImportProfileAsync(string filePath, CancellationToken ct = default)
+    {
+        await RunSafe(async () =>
+        {
+            SetStatus("Importing server profile…");
 
             var json = await File.ReadAllTextAsync(filePath, ct);
             var loaded = JsonSerializer.Deserialize<ConnectionProfile>(json)
                          ?? throw new InvalidOperationException("Invalid profile file.");
 
-            Profile = loaded;
-            SaveLastProfilePath(filePath);
+            // Always mint a fresh Id so importing a file exported from this app's own library
+            // (or one another machine already imported) can't silently collide with and
+            // overwrite an existing entry.
+            loaded.Id = Guid.NewGuid();
 
-            SetStatus($"Profile loaded: {filePath}");
+            await PersistProfileFileAsync(loaded, ct);
+            SavedProfiles = SavedProfiles.Append(loaded).OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+            Profile = loaded;
+            PersistActiveProfileId(loaded.Id);
+
+            SetStatus($"Profile imported: {loaded.Name}");
         });
     }
 
-    public string? GetExistingLastProfilePath()
+    private static string ProfileFilePath(Guid id) => Path.Combine(AppPaths.ProfilesDirectory, $"{id}.json");
+
+    private static async Task PersistProfileFileAsync(ConnectionProfile profile, CancellationToken ct)
     {
-        if (!File.Exists(LastProfilePointerPath))
-            return null;
+        var json = JsonSerializer.Serialize(profile, new JsonSerializerOptions { WriteIndented = true });
+        await File.WriteAllTextAsync(ProfileFilePath(profile.Id), json, ct);
+    }
 
-        var path = File.ReadAllText(LastProfilePointerPath).Trim();
-        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
-            return null;
+    private static void PersistActiveProfileId(Guid id)
+        => File.WriteAllText(AppPaths.ActiveProfileIdFile, id.ToString());
 
-        return path;
+    private void LoadSavedProfiles()
+    {
+        var profiles = new List<ConnectionProfile>();
+
+        string dir;
+        try
+        {
+            dir = AppPaths.ProfilesDirectory;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to access the saved-profiles directory");
+            return;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(dir, "*.json"))
+        {
+            try
+            {
+                var json = File.ReadAllText(file);
+                var profile = JsonSerializer.Deserialize<ConnectionProfile>(json);
+                if (profile is not null)
+                    profiles.Add(profile);
+            }
+            catch (Exception ex)
+            {
+                // A single corrupt profile file shouldn't block the app from starting.
+                _logger.LogError(ex, "Failed to load saved profile from {File}", file);
+            }
+        }
+
+        SavedProfiles = profiles.OrderBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToList();
+    }
+
+    private void RestoreActiveProfile()
+    {
+        if (SavedProfiles.Count == 0)
+            return;
+
+        Guid? activeId = null;
+        try
+        {
+            if (File.Exists(AppPaths.ActiveProfileIdFile) &&
+                Guid.TryParse(File.ReadAllText(AppPaths.ActiveProfileIdFile).Trim(), out var parsed))
+                activeId = parsed;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to read the last active profile pointer");
+        }
+
+        Profile = (activeId is not null ? SavedProfiles.FirstOrDefault(p => p.Id == activeId) : null)
+                  ?? SavedProfiles[0];
     }
 
     public async Task ExportAsync(ExportOptions options, CancellationToken ct = default)
@@ -923,11 +1077,6 @@ public class OpcUaService
     }
 
     private void Notify() => StateChanged?.Invoke();
-
-    private static void SaveLastProfilePath(string filePath)
-    {
-        File.WriteAllText(LastProfilePointerPath, filePath);
-    }
 
     private static IEnumerable<OpcTag> FlattenAll(IEnumerable<OpcTag> tags)
     {
