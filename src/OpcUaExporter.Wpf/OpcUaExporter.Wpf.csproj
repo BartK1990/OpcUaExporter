@@ -7,7 +7,7 @@
     abstractions declared in OpcUaExporter.Core.
 
     Keeps AssemblyName "OpcUaExporter" so the published executable stays
-    OpcUaExporter.exe (referenced by the MSIX manifest in CI).
+    OpcUaExporter.exe.
   -->
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
