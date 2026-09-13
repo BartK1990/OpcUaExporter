@@ -1009,6 +1009,14 @@ body.row-resizing * {
 
 .resizable-th:last-child { border-right: none; }
 
+/* Trailing auto-width column that absorbs whatever table width the sized
+   columns don't use, so resizing a column moves only that column. */
+.resizable-table th.col-filler,
+.resizable-table td.col-filler {
+    padding: 0;
+    border-right: none;
+}
+
 .th-label {
     display: inline-flex;
     align-items: center;

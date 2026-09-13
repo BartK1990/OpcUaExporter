@@ -268,6 +268,12 @@
                                     <col style="width:110px;" />
                                     <col style="width:90px;" />
                                     <col style="width:170px;" />
+                                    @* Auto-width filler: with table-layout:fixed the browser hands any
+                                       spare table width back to the sized columns, which makes a dragged
+                                       column edge drift away from the pointer. A trailing auto column
+                                       soaks up that spare width instead, so every sized column renders at
+                                       exactly the width the resize handle gives it. *@
+                                    <col class="col-filler" />
                                 </colgroup>
                                 <thead>
                                     <tr>
@@ -284,6 +290,7 @@
                                         <th class="resizable-th"><span class="th-label">Data Type</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Quality</span><span class="col-resize-handle"></span></th>
                                         <th class="resizable-th"><span class="th-label">Timestamp</span><span class="col-resize-handle"></span></th>
+                                        <th class="col-filler"></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -345,6 +352,7 @@
                                             <td>@(reading?.DataType ?? tag.DataType)</td>
                                             <td class="@QualityClass(reading?.Quality)">@reading?.Quality</td>
                                             <td class="mono">@FormatTimestamp(reading?.Timestamp)</td>
+                                            <td class="col-filler"></td>
                                         </tr>
                                     }
                                 </tbody>
