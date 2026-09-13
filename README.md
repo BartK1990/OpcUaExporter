@@ -8,32 +8,70 @@ OPC UA communication is handled natively from .NET using the [OPC Foundation's U
 
 ---
 
+## Installing a release package
+
+You don't need the .NET SDK or Visual Studio to use the app — download a
+ready-built package from the
+[latest release](https://github.com/BartK1990/OpcUaExporter/releases/latest).
+Each release ships three ZIP files:
+
+| File | What it is | Needs installed on the PC |
+|---|---|---|
+| `OpcUaExporter-<version>-self-contained.zip` | 64-bit build with the .NET runtime bundled — **recommended** | nothing extra |
+| `OpcUaExporter-<version>-win_x64.zip` | 64-bit build, smaller, uses the shared .NET runtime | [.NET 8 Desktop Runtime (x64)](https://dotnet.microsoft.com/download/dotnet/8.0) |
+| `OpcUaExporter-<version>-portable.zip` | Build not tied to one CPU architecture, uses the shared .NET runtime | [.NET 8 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) |
+
+All variants also need the **Microsoft Edge WebView2 Runtime**, which is
+preinstalled on Windows 11 and on up-to-date Windows 10. If the window stays
+blank, install it from
+[Microsoft](https://developer.microsoft.com/microsoft-edge/webview2/).
+
+There is no installer:
+
+1. Download the `.zip` you want (the `self-contained` one if unsure).
+2. Extract it to a folder of your choice, e.g. `C:\Tools\OpcUaExporter\`.
+   Extract the whole archive — don't run the app from inside the zip.
+3. Start `OpcUaExporter.exe` from that folder.
+
+The executable isn't code-signed, so on first launch Windows SmartScreen may
+show *"Windows protected your PC"* — click **More info → Run anyway**.
+
+To update, extract the new version over the old folder (or into a new one).
+To uninstall, delete the folder. Settings, saved profiles and certificates live
+in `%LocalAppData%\OpcUaExporter\`, so they survive updates; delete that folder
+too if you want to remove everything.
+
+The rest of this README covers how the app is built and how to build it from
+source.
+
+---
+
 ## Architecture
 
 The application is split into three projects, each with a single
 responsibility and a one-way dependency chain:
 
 ```
-┌───────────────────────────────────────────────────────────────┐
-│  OpcUaExporter.Wpf          (net8.0-windows, WinExe)          │
-│  WPF shell: process lifetime, DI container, crash logging,     │
-│  BlazorWebView host, native dialogs (IFileDialogService)       │
-└───────────────────────────┬───────────────────────────────────┘
-                            │ references
-┌───────────────────────────▼───────────────────────────────────┐
-│  OpcUaExporter.UI           (net8.0, Razor class library)      │
-│  Blazor pages, components and static web assets                │
-│  (served from _content/OpcUaExporter.UI/)                      │
-└───────────────────────────┬───────────────────────────────────┘
-                            │ references
-┌───────────────────────────▼───────────────────────────────────┐
-│  OpcUaExporter.Core         (net8.0, class library)            │
-│  Models, OpcUaService (state) ──► OpcUaClientService (session) │
-│  plus the platform abstractions the UI depends on              │
-└───────────────────────────┬───────────────────────────────────┘
-                            │ Opc.Ua.Client (OPCFoundation SDK)
-                            ▼
-                     OPC UA Server (network)
+┌─────────────────────────────────────────────────────────────────┐
+│  OpcUaExporter.Wpf          (net8.0-windows, WinExe)            │
+│  WPF shell: process lifetime, DI container, crash logging,      │
+│  BlazorWebView host, native dialogs (IFileDialogService)        │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ references
+┌────────────────────────────▼────────────────────────────────────┐
+│  OpcUaExporter.UI           (net8.0, Razor class library)       │
+│  Blazor pages, components and static web assets                 │
+│  (served from _content/OpcUaExporter.UI/)                       │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ references
+┌────────────────────────────▼────────────────────────────────────┐
+│  OpcUaExporter.Core         (net8.0, class library)             │
+│  Models, OpcUaService (state) ──► OpcUaClientService (session)  │
+│  plus the platform abstractions the UI depends on               │
+└────────────────────────────┬────────────────────────────────────┘
+                             │ Opc.Ua.Client (OPCFoundation SDK)
+                             ▼
+                  OPC UA Server (network)
 ```
 
 Neither `OpcUaExporter.Core` nor `OpcUaExporter.UI` references WPF or any
