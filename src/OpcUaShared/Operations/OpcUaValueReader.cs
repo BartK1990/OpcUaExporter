@@ -90,10 +90,27 @@ public sealed class OpcUaValueReader(DiagnosticsLogService diagnostics)
     /// Server-declared limit on nodes per Read call; values below 1 mean "no limit
     /// declared" and fall back to <see cref="DefaultMaxNodesPerRead"/>.
     /// </param>
-    public static async Task<DataValue[]> ReadValuesAsync(
-        Session session,
+    public static Task<DataValue[]> ReadValuesAsync(
+        ISession session,
         IReadOnlyList<NodeId> nodeIds,
         int maxNodesPerRead = DefaultMaxNodesPerRead,
+        CancellationToken ct = default)
+        => ReadAttributeAsync(session, nodeIds, Attributes.Value, maxNodesPerRead, TimestampsToReturn.Both, ct);
+
+    /// <summary>
+    /// Reads one attribute of many nodes in as few service calls as the server allows.
+    /// </summary>
+    /// <remarks>
+    /// Generalises <see cref="ReadValuesAsync"/> so that metadata sweeps -- reading every
+    /// variable's AccessLevel while capturing a namespace, say -- get the same chunking
+    /// rather than one round trip per node.
+    /// </remarks>
+    public static async Task<DataValue[]> ReadAttributeAsync(
+        ISession session,
+        IReadOnlyList<NodeId> nodeIds,
+        uint attributeId,
+        int maxNodesPerRead = DefaultMaxNodesPerRead,
+        TimestampsToReturn timestamps = TimestampsToReturn.Both,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
@@ -116,11 +133,11 @@ public sealed class OpcUaValueReader(DiagnosticsLogService diagnostics)
                 request.Add(new ReadValueId
                 {
                     NodeId = nodeIds[offset + i],
-                    AttributeId = Attributes.Value
+                    AttributeId = attributeId
                 });
             }
 
-            var response = await session.ReadAsync(null, 0, TimestampsToReturn.Both, request, ct);
+            var response = await session.ReadAsync(null, 0, timestamps, request, ct);
             var values = response?.Results;
 
             for (var i = 0; i < count; i++)
@@ -138,7 +155,7 @@ public sealed class OpcUaValueReader(DiagnosticsLogService diagnostics)
     /// The server's declared <c>MaxNodesPerRead</c>, or <see cref="DefaultMaxNodesPerRead"/>
     /// when it declares none.
     /// </summary>
-    public static async Task<int> GetMaxNodesPerReadAsync(Session session, CancellationToken ct = default)
+    public static async Task<int> GetMaxNodesPerReadAsync(ISession session, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
 
