@@ -98,7 +98,7 @@ public sealed class OpcUaValueWriter(DiagnosticsLogService diagnostics)
     /// timestamps are the upstream server's to assign.
     /// </remarks>
     public static async Task<StatusCode> WriteValueAsync(
-        Session session,
+        ISession session,
         NodeId nodeId,
         DataValue value,
         CancellationToken ct = default)

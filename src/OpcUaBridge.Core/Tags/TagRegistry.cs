@@ -18,6 +18,7 @@ public sealed class TagRegistry
     internal const string UnknownNamespaceUri = "urn:opcuabridge:unresolved-namespace";
 
     private readonly Dictionary<NodeId, MirrorTag> _byMirrorNodeId = [];
+    private Dictionary<string, MirrorTag>? _byUpstreamIdentity;
 
     private TagRegistry(NamespaceSnapshot snapshot, IReadOnlyList<MirrorTag> tags)
     {
@@ -89,10 +90,19 @@ public sealed class TagRegistry
     }
 
     /// <summary>Records the NodeId the bridge's own server publishes a tag under.</summary>
-    internal void SetMirrorNodeId(MirrorTag tag, NodeId mirrorNodeId)
+    public void SetMirrorNodeId(MirrorTag tag, NodeId mirrorNodeId)
     {
         tag.MirrorNodeId = mirrorNodeId;
         _byMirrorNodeId[mirrorNodeId] = tag;
+    }
+
+    /// <summary>Finds a tag by the upstream identity recorded in the snapshot.</summary>
+    public bool TryGetTagByUpstreamIdentity(string namespaceUri, string identifier, out MirrorTag tag)
+    {
+        _byUpstreamIdentity ??= Tags.ToDictionary(
+            t => $"{t.UpstreamNamespaceUri}|{t.Identifier}", t => t, StringComparer.Ordinal);
+
+        return _byUpstreamIdentity.TryGetValue($"{namespaceUri}|{identifier}", out tag!);
     }
 
     /// <summary>Finds a tag by the NodeId a downstream client used.</summary>
