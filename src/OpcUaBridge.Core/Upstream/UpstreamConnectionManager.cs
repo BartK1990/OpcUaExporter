@@ -244,7 +244,7 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
                 return;
             }
 
-            lock (_stateGate) _lastError = e.Status.ToString();
+            lock (_stateGate) _lastError = e.Status?.ToString() ?? "Keep-alive reported a bad status.";
 
             // Stop the SDK's own keep-alive retries: we are taking over with the
             // reconnect handler, and two recovery mechanisms racing helps nobody.
@@ -275,6 +275,7 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
 
         _reconnectHandler?.Dispose();
         _reconnectHandler = new SessionReconnectHandler(
+            session.MessageContext.Telemetry,
             reconnectAbort: true,
             maxReconnectPeriod: upstream.ReconnectMaxDelayMs);
 

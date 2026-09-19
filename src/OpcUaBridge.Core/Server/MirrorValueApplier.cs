@@ -2,7 +2,6 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpcUaBridge.Configuration;
-using OpcUaBridge.Tags;
 
 namespace OpcUaBridge.Server;
 
@@ -17,7 +16,6 @@ namespace OpcUaBridge.Server;
 /// </remarks>
 public sealed class MirrorValueApplier(
     BridgeServer server,
-    TagValueStore values,
     IOptionsMonitor<BridgeOptions> options,
     ILogger<MirrorValueApplier> logger,
     TimeProvider? timeProvider = null) : BackgroundService

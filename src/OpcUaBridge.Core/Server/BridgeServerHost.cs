@@ -109,18 +109,19 @@ public sealed class BridgeServerHost(
         return string.Join(" -> ", parts);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken)
+    public async Task StopAsync(CancellationToken cancellationToken)
     {
+        if (_application is null)
+            return;
+
         try
         {
-            _application?.Stop();
+            await _application.StopAsync();
             logger.LogInformation("Mirrored OPC UA endpoint stopped.");
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Stopping the mirrored OPC UA endpoint reported an error.");
         }
-
-        return Task.CompletedTask;
     }
 }

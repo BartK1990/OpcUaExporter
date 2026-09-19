@@ -39,7 +39,6 @@ public sealed class AcquisitionCoordinator(
     IUpstreamConnection upstream,
     AcquisitionEngineFactory engineFactory,
     TagRegistry registry,
-    TagValueStore values,
     TagStalenessMonitor staleness,
     IOptionsMonitor<BridgeOptions> options,
     ILogger<AcquisitionCoordinator> logger) : IHostedService

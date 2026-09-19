@@ -115,7 +115,8 @@ public sealed class SubscriptionAcquisitionEngine(
                 subscription.AddItem(new MonitoredItem(subscription.DefaultItem)
                 {
                     DisplayName = tag.BrowsePath,
-                    StartNodeId = tag.UpstreamNodeId,
+                    // Non-null: the chunk is drawn from tags that resolved against this session.
+                    StartNodeId = tag.UpstreamNodeId!,
                     AttributeId = Attributes.Value,
                     SamplingInterval = acquisition.SamplingIntervalMs,
                     QueueSize = (uint)acquisition.QueueSize,
