@@ -1,0 +1,44 @@
+name: CI
+
+# Guards the property the repository's layout depends on: everything except the WPF
+# shell builds and tests on Linux. Without this, a Windows-only dependency can creep
+# into shared code and nobody notices until a non-Windows session tries to build.
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      # The solution filter excludes src/OpcUaExporter.Wpf, which targets
+      # net8.0-windows and can never build here.
+      - name: Restore
+        run: dotnet restore OpcUaExporter.Linux.slnf
+
+      - name: Build
+        run: dotnet build OpcUaExporter.Linux.slnf -c Release --no-restore
+
+      - name: Test exporter
+        run: dotnet test tests/OpcUaExporter.Tests/OpcUaExporter.Tests.csproj -c Release --no-build
+
+      - name: Test bridge
+        run: >
+          dotnet test tests/OpcUaBridge.Tests/OpcUaBridge.Tests.csproj
+          -c Release --no-build --filter "Category!=Integration"
+
+      # These start real OPC UA servers in-process and generate certificates. They are
+      # slower, so they run once here rather than on every developer's machine.
+      - name: Test bridge (integration)
+        run: >
+          dotnet test tests/OpcUaBridge.Tests/OpcUaBridge.Tests.csproj
+          -c Release --no-build --filter "Category=Integration"
