@@ -2,6 +2,8 @@ using Microsoft.Extensions.Logging;
 using Opc.Ua;
 using Opc.Ua.Client;
 using Opc.Ua.Configuration;
+using OpcUaExporter.Abstractions;
+using OpcUaExporter.Configuration;
 using OpcUaExporter.Models;
 using System.Collections.Concurrent;
 using System.IO;
@@ -75,10 +77,27 @@ public class OpcUaClientService
     private readonly ConcurrentDictionary<string, X509Certificate2> _pendingCertificates = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _trustedThumbprints = new(StringComparer.OrdinalIgnoreCase);
 
-    public OpcUaClientService(ILogger<OpcUaClientService> logger, DiagnosticsLogService diagnostics)
+    private readonly OpcUaApplicationIdentity _identity;
+    private readonly IOpcUaPkiLocation _pki;
+
+    /// <param name="identity">
+    /// Identity presented to the server. Defaults to the exporter's, so an existing
+    /// <c>CN=OpcUaExporter</c> certificate store keeps working untouched.
+    /// </param>
+    /// <param name="pki">
+    /// Where the certificate stores live. Defaults to
+    /// <c>%LocalAppData%\OpcUaExporter\pki</c>, the exporter's long-standing location.
+    /// </param>
+    public OpcUaClientService(
+        ILogger<OpcUaClientService> logger,
+        DiagnosticsLogService diagnostics,
+        OpcUaApplicationIdentity? identity = null,
+        IOpcUaPkiLocation? pki = null)
     {
         _logger = logger;
         _diagnostics = diagnostics;
+        _identity = identity ?? OpcUaApplicationIdentity.Exporter;
+        _pki = pki ?? OpcUaPkiLocation.LocalAppData(_identity.ApplicationName);
         _configuration = new Lazy<Task<ApplicationConfiguration>>(BuildConfigurationAsync);
     }
 
@@ -339,7 +358,7 @@ public class OpcUaClientService
 
             var subscription = new Subscription(session.DefaultSubscription)
             {
-                DisplayName = "OpcUaExporter Live Subscription",
+                DisplayName = $"{_identity.ApplicationName} Live Subscription",
                 PublishingEnabled = true,
                 PublishingInterval = 1000,
                 KeepAliveCount = 10,
@@ -759,7 +778,7 @@ public class OpcUaClientService
                 config,
                 endpoint,
                 true,
-                "OpcUaExporter",
+                _identity.ApplicationName,
                 60000,
                 userIdentity,
                 null,
@@ -931,7 +950,7 @@ public class OpcUaClientService
 
     private async Task<ApplicationConfiguration> BuildConfigurationAsync()
     {
-        var pkiRoot = AppPaths.PkiDirectory;
+        var pkiRoot = _pki.PkiRoot;
 
         var trustedPeerStorePath = Path.Combine(pkiRoot, "trusted");
         var trustedIssuerStorePath = Path.Combine(pkiRoot, "issuer");
@@ -946,16 +965,16 @@ public class OpcUaClientService
 
         var config = new ApplicationConfiguration
         {
-            ApplicationName = "OpcUaExporter",
+            ApplicationName = _identity.ApplicationName,
             ApplicationType = ApplicationType.Client,
-            ApplicationUri = $"urn:{Utils.GetHostName()}:OpcUaExporter",
+            ApplicationUri = _identity.ApplicationUri,
             SecurityConfiguration = new SecurityConfiguration
             {
                 ApplicationCertificate = new CertificateIdentifier
                 {
                     StoreType = CertificateStoreType.Directory,
                     StorePath = ownStorePath,
-                    SubjectName = "CN=OpcUaExporter"
+                    SubjectName = _identity.SubjectName
                 },
                 TrustedPeerCertificates = new CertificateTrustList
                 {
@@ -1025,7 +1044,7 @@ public class OpcUaClientService
         if (clientKeySize < 2048)
         {
             throw new InvalidOperationException(
-                $"Client application certificate key size is {clientKeySize}. Basic256Sha256 typically requires at least 2048. Delete '%LocalAppData%\\OpcUaExporter\\pki\\own' and restart the app to regenerate a stronger certificate.");
+                $"Client application certificate key size is {clientKeySize}. Basic256Sha256 typically requires at least 2048. Delete '{ownStorePath}' and restart the app to regenerate a stronger certificate.");
         }
 
         config.CertificateValidator.CertificateValidation += (_, e) =>
