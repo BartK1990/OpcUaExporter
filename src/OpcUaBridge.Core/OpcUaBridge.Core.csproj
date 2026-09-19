@@ -18,6 +18,7 @@
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.*" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="8.0.*" />
     <!-- The client packages come in transitively via OpcUaShared; the server
          library is this project's own, for the mirrored endpoint. -->
     <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Server" Version="1.5.*" />

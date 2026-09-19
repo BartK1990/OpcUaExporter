@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    The headless host: Serilog, Windows service hosting, dependency injection and
+    the Blazor Server operator dashboard.
+
+    Deliberately net8.0 rather than net8.0-windows. UseWindowsService is a no-op
+    off Windows, so keeping the plain TFM costs nothing at runtime and means the
+    whole gateway, including its embedded OPC UA server, builds and runs on Linux
+    CI as well as on the Windows machine it ships to.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>OpcUaBridge.Host</RootNamespace>
+    <!-- Publishes OpcUaBridge.exe. -->
+    <AssemblyName>OpcUaBridge</AssemblyName>
+    <!--
+      Globalization-invariant mode is NOT enabled: the OPC UA SDK constructs specific
+      CultureInfo instances while starting a server, which throws CultureNotFoundException
+      under it. The failure surfaces as an opaque BadInternalError, so it is worth a note.
+    -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.*" />
+    <PackageReference Include="Serilog.AspNetCore" Version="8.0.*" />
+    <PackageReference Include="Serilog.Sinks.Async" Version="2.0.*" />
+    <PackageReference Include="Serilog.Sinks.Console" Version="6.0.*" />
+    <PackageReference Include="Serilog.Sinks.File" Version="6.0.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpcUaBridge.Core\OpcUaBridge.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Content Update="appsettings*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\deploy\*.ps1" Link="deploy\%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

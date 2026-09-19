@@ -19,6 +19,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\OpcUaBridge.Core\OpcUaBridge.Core.csproj" />
+    <ProjectReference Include="..\..\src\OpcUaBridge.Host\OpcUaBridge.Host.csproj" />
   </ItemGroup>
 
 </Project>

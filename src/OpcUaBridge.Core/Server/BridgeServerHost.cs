@@ -43,10 +43,70 @@ public sealed class BridgeServerHost(
                 "Check that the service account can write there.");
         }
 
-        await _application.StartAsync(server);
-
         EndpointUrl = configuration.ServerConfiguration.BaseAddresses.FirstOrDefault();
+
+        try
+        {
+            await _application.StartAsync(server);
+        }
+        catch (Exception ex)
+        {
+            // The SDK reports almost every start-up failure as BadInternalError with the
+            // text "Unexpected error starting application", which on its own tells an
+            // operator nothing. The real cause is usually in the inner exception -- a port
+            // already in use, an unresolvable host name in the endpoint URL, or a
+            // certificate the process cannot read -- so name it and what to do about it.
+            throw new InvalidOperationException(
+                $"Could not start the mirrored OPC UA endpoint on '{EndpointUrl}'. " +
+                $"{DescribeStartupFailure(ex)} " +
+                "Check that the port is free, that Bridge:Server:Host resolves on this machine, " +
+                $"and that the service account can read '{paths.ServerPkiDirectory}'.",
+                ex);
+        }
+
         logger.LogInformation("Mirrored OPC UA endpoint listening on {EndpointUrl}.", EndpointUrl);
+    }
+
+    /// <summary>
+    /// Digs the useful message out of the SDK's wrapping.
+    /// </summary>
+    /// <remarks>
+    /// A <see cref="ServiceResultException"/> carries the real diagnostic in its nested
+    /// <see cref="ServiceResult.InnerResult"/> chain, not in its message, which is why the
+    /// bare exception text is so uninformative.
+    /// </remarks>
+    private static string DescribeStartupFailure(Exception exception)
+    {
+        for (var inner = exception; inner is not null; inner = inner.InnerException)
+        {
+            if (inner is ServiceResultException serviceResult)
+            {
+                var detail = DescribeServiceResult(serviceResult.Result);
+                if (!string.IsNullOrWhiteSpace(detail))
+                    return $"The underlying error was: {detail}";
+
+                continue;
+            }
+
+            return $"The underlying error was: {inner.GetType().Name}: {inner.Message}.";
+        }
+
+        return $"The underlying error was: {exception.Message}.";
+    }
+
+    private static string DescribeServiceResult(ServiceResult? result)
+    {
+        var parts = new List<string>();
+
+        for (var current = result; current is not null; current = current.InnerResult)
+        {
+            if (!string.IsNullOrWhiteSpace(current.AdditionalInfo))
+                parts.Add(current.AdditionalInfo.Trim());
+            else if (!string.IsNullOrWhiteSpace(current.LocalizedText?.Text))
+                parts.Add(current.LocalizedText.Text);
+        }
+
+        return string.Join(" -> ", parts);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)

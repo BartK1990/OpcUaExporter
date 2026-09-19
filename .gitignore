@@ -361,3 +361,7 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+# OPC UA Bridge runtime state, created beside the executable when it runs.
+src/OpcUaBridge.Host/Logs/
+src/OpcUaBridge.Host/config/
+src/OpcUaBridge.Host/pki/

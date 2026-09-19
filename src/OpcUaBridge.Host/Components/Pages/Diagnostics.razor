@@ -1,0 +1,52 @@
+@page "/diagnostics"
+@implements IDisposable
+@inject OpcUaExporter.Services.DiagnosticsLogService DiagnosticsLog
+@inject BridgePaths Paths
+
+<PageTitle>Diagnostics — OPC UA Bridge</PageTitle>
+
+<h1>Diagnostics</h1>
+
+<p class="note">
+    The most recent OPC UA client activity. The full log, including everything the gateway
+    itself records, is written to <code>@Paths.LogDirectory</code> —
+    @BridgeLogging.RetainedFileCountLimit files of up to
+    @(BridgeLogging.FileSizeLimitBytes / 1024 / 1024) MB each.
+</p>
+
+<div class="toolbar">
+    <button class="button" @onclick="DiagnosticsLog.Clear">Clear</button>
+    <span class="count">@_entries.Count entries</span>
+</div>
+
+<pre class="log">@string.Join(Environment.NewLine, _entries)</pre>
+
+@code {
+    private IReadOnlyList<string> _entries = [];
+    private PeriodicTimer? _timer;
+
+    protected override void OnInitialized()
+    {
+        _entries = DiagnosticsLog.Entries;
+
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        _ = RefreshLoopAsync(_timer);
+    }
+
+    private async Task RefreshLoopAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync())
+            {
+                _entries = DiagnosticsLog.Entries;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}

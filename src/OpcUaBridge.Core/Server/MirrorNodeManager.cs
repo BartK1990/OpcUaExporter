@@ -57,13 +57,24 @@ public sealed class MirrorNodeManager : CustomNodeManager2
         _mirrorNamespaceIndexes = new ushort[registry.Snapshot.NamespaceUris.Count];
     }
 
+    /// <summary>The bridge's own namespace, for the nodes it adds rather than mirrors.</summary>
+    public const string BridgeNamespaceUri = "urn:opcuabridge:mirror";
+
     /// <summary>
-    /// The namespaces this node manager owns: every one the upstream server published,
-    /// except the standard OPC UA namespace, which every server already has at index 0.
+    /// The namespaces this node manager owns.
     /// </summary>
+    /// <remarks>
+    /// Every namespace the upstream server published, minus the standard OPC UA one that
+    /// every server already has at index 0, plus the bridge's own. The bridge's own is
+    /// always present even when nothing has been captured yet: a node manager with no
+    /// namespaces cannot create so much as its root folder, which would stop the whole
+    /// service starting on a fresh installation -- exactly when an operator most needs the
+    /// dashboard to come up and tell them to capture a namespace.
+    /// </remarks>
     private static string[] BuildNamespaceUris(NamespaceSnapshot snapshot)
         => snapshot.NamespaceUris
             .Where(uri => !string.Equals(uri, Opc.Ua.Namespaces.OpcUa, StringComparison.Ordinal))
+            .Append(BridgeNamespaceUri)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
 
@@ -149,7 +160,7 @@ public sealed class MirrorNodeManager : CustomNodeManager2
 
     private FolderState CreateFolder(NodeState? parent, string browseName, string displayName, ushort namespaceIndex = 0)
     {
-        var effectiveNamespace = namespaceIndex != 0 ? namespaceIndex : NamespaceIndexes[0];
+        var effectiveNamespace = namespaceIndex != 0 ? namespaceIndex : BridgeNamespaceIndex;
 
         var folder = new FolderState(parent)
         {
@@ -211,10 +222,13 @@ public sealed class MirrorNodeManager : CustomNodeManager2
         _nodesByTagIndex[tag.Index] = variable;
     }
 
+    /// <summary>This server's index for <see cref="BridgeNamespaceUri"/>.</summary>
+    private ushort BridgeNamespaceIndex => (ushort)Server.NamespaceUris.GetIndexOrAppend(BridgeNamespaceUri);
+
     private ushort MirrorNamespaceIndex(SnapshotNode node)
         => node.NamespaceIndex >= 0 && node.NamespaceIndex < _mirrorNamespaceIndexes.Length
             ? _mirrorNamespaceIndexes[node.NamespaceIndex]
-            : NamespaceIndexes[0];
+            : BridgeNamespaceIndex;
 
     private string MirrorNamespaceUri(SnapshotNode node)
         => node.NamespaceIndex >= 0 && node.NamespaceIndex < _registry.Snapshot.NamespaceUris.Count

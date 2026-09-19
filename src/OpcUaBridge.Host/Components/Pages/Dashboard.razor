@@ -1,0 +1,155 @@
+@page "/"
+@implements IDisposable
+@inject IUpstreamConnection Upstream
+@inject AcquisitionCoordinator Acquisition
+@inject TagRegistry Registry
+@inject TagValueStore Values
+@inject BridgeServerHost ServerHost
+@inject INamespaceSnapshotStore SnapshotStore
+@inject IOptions<BridgeOptions> Options
+
+<PageTitle>OPC UA Bridge</PageTitle>
+
+<h1>Dashboard</h1>
+
+<div class="cards">
+    <section class="card @StateClass">
+        <h2>Upstream</h2>
+        <p class="headline">@_status.State</p>
+        <dl>
+            <dt>Endpoint</dt><dd>@Options.Value.Upstream.EndpointUrl</dd>
+            <dt>Since</dt><dd>@Relative(_status.Since)</dd>
+            <dt>Connected since</dt><dd>@(_status.ConnectedSince is { } c ? Relative(c) : "—")</dd>
+            <dt>Reconnects</dt><dd>@_status.ReconnectCount</dd>
+            @if (_status.LastError is { } error)
+            {
+                <dt>Last error</dt><dd class="error">@error</dd>
+            }
+        </dl>
+        @if (_status.State is UpstreamConnectionState.Faulted)
+        {
+            <p class="note">
+                Retrying will not help until the cause is fixed — usually a certificate the
+                upstream server has not trusted, or credentials it rejected.
+            </p>
+        }
+        <button class="button" @onclick="Reconnect">Reconnect now</button>
+    </section>
+
+    <section class="card">
+        <h2>Downstream</h2>
+        <p class="headline">@(ServerHost.EndpointUrl is null ? "Starting" : "Listening")</p>
+        <dl>
+            <dt>Endpoint</dt><dd>@(ServerHost.EndpointUrl ?? "—")</dd>
+            <dt>Writes</dt><dd>@(Options.Value.Server.AllowWrites ? "Forwarded upstream" : "Rejected")</dd>
+            <dt>Mirrored tags</dt><dd>@Registry.Count</dd>
+        </dl>
+    </section>
+
+    <section class="card">
+        <h2>Acquisition</h2>
+        <p class="headline">@(Acquisition.Engine?.Mode.ToString() ?? "Idle")</p>
+        <dl>
+            <dt>Values received</dt><dd>@(_statistics?.ValuesReceived ?? 0)</dd>
+            <dt>Cycles</dt><dd>@(_statistics?.CyclesCompleted ?? 0)</dd>
+            @if (_statistics?.CyclesSkipped > 0)
+            {
+                <dt>Skipped cycles</dt>
+                <dd class="warning">@_statistics.CyclesSkipped</dd>
+            }
+            <dt>Last update</dt>
+            <dd>@(_statistics?.LastUpdateUtc is { } u ? Relative(u) : "—")</dd>
+            <dt>Pending apply</dt><dd>@Values.PendingCount</dd>
+        </dl>
+        @if (_statistics?.CyclesSkipped > 0)
+        {
+            <p class="note">
+                Cycles are being skipped because the previous one was still running. They are
+                never queued, so this means the polling interval is too tight for this tag
+                count — lengthen it, or switch to subscription mode.
+            </p>
+        }
+    </section>
+
+    <section class="card">
+        <h2>Namespace</h2>
+        <p class="headline">@(_snapshot is null ? "Not captured" : $"{_snapshot.Stats.VariableCount} tags")</p>
+        <dl>
+            @if (_snapshot is not null)
+            {
+                <dt>Captured</dt><dd>@Relative(_snapshot.CapturedUtc)</dd>
+                <dt>From</dt><dd>@_snapshot.Source.EndpointUrl</dd>
+            }
+            <dt>File</dt><dd class="path">@SnapshotStore.SnapshotPath</dd>
+        </dl>
+        @if (_status.MissingNamespaceUris.Count > 0)
+        {
+            <p class="note warning">
+                The upstream server no longer publishes @_status.MissingNamespaceUris.Count
+                namespace(s) from this snapshot, so those tags report BadNodeIdUnknown.
+                Capture the namespace again to pick up the change.
+            </p>
+        }
+    </section>
+</div>
+
+@code {
+    private UpstreamStatus _status = null!;
+    private AcquisitionStatistics? _statistics;
+    private NamespaceSnapshot? _snapshot;
+    private PeriodicTimer? _timer;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _status = Upstream.Status;
+        _snapshot = await SnapshotStore.LoadAsync();
+
+        // Polled on a timer rather than driven by an event per value. At a few thousand
+        // tags, re-rendering on every update would saturate the SignalR circuit with
+        // frames nobody can read that fast.
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        _ = RefreshLoopAsync(_timer);
+    }
+
+    private async Task RefreshLoopAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync())
+            {
+                _status = Upstream.Status;
+                _statistics = Acquisition.Engine?.Statistics;
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // The circuit went away; nothing to do.
+        }
+    }
+
+    private void Reconnect() => Upstream.RequestReconnect();
+
+    private string StateClass => _status.State switch
+    {
+        UpstreamConnectionState.Connected => "good",
+        UpstreamConnectionState.Faulted => "bad",
+        UpstreamConnectionState.Reconnecting or UpstreamConnectionState.Connecting => "pending",
+        _ => string.Empty
+    };
+
+    private static string Relative(DateTimeOffset moment)
+    {
+        var elapsed = DateTimeOffset.UtcNow - moment;
+
+        return elapsed switch
+        {
+            { TotalSeconds: < 60 } => $"{elapsed.TotalSeconds:F0}s ago",
+            { TotalMinutes: < 60 } => $"{elapsed.TotalMinutes:F0}m ago",
+            { TotalHours: < 24 } => $"{elapsed.TotalHours:F0}h ago",
+            _ => moment.ToString("u")
+        };
+    }
+
+    public void Dispose() => _timer?.Dispose();
+}
