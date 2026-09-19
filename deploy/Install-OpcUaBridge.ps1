@@ -48,11 +48,40 @@ if (Get-Service $ServiceName -ErrorAction SilentlyContinue) {
 Write-Host "Copying to $InstallPath."
 New-Item -ItemType Directory -Path $InstallPath -Force | Out-Null
 
-# Operator state is preserved across upgrades.
-Get-ChildItem -Path $SourcePath -Exclude 'config', 'pki', 'Logs' |
+$settingsPath = Join-Path $InstallPath 'appsettings.json'
+$isUpgrade = Test-Path $settingsPath
+
+# Operator state is preserved across upgrades: the certificate stores, the captured
+# namespace, the logs -- and appsettings.json, which holds the upstream endpoint and is
+# the first thing the operator edits. Overwriting it would silently repoint a working
+# gateway at opc.tcp://localhost:4840.
+$preserve = @('config', 'pki', 'Logs')
+if ($isUpgrade) { $preserve += 'appsettings.json' }
+
+Get-ChildItem -Path $SourcePath -Exclude $preserve |
     Copy-Item -Destination $InstallPath -Recurse -Force
 
+if ($isUpgrade) {
+    Copy-Item -Path (Join-Path $SourcePath 'appsettings.json') `
+              -Destination (Join-Path $InstallPath 'appsettings.json.new') -Force
+    Write-Host 'Kept your appsettings.json. The new release''s version is beside it as appsettings.json.new.'
+}
+
 $exe = Join-Path $InstallPath 'OpcUaBridge.exe'
+
+# Write the ports into the configuration, so -UaPort and -WebPort actually take effect
+# rather than only opening a firewall rule and printing a URL the service does not use.
+if (-not $isUpgrade) {
+    $settings = Get-Content $settingsPath -Raw | ConvertFrom-Json
+    $settings.Bridge.Server.Port = $UaPort
+    $settings.Bridge.Web.Urls = "http://127.0.0.1:$WebPort"
+    $settings | ConvertTo-Json -Depth 10 | Set-Content $settingsPath -Encoding UTF8
+} else {
+    $configured = (Get-Content $settingsPath -Raw | ConvertFrom-Json).Bridge.Server.Port
+    if ($configured -ne $UaPort) {
+        Write-Warning "appsettings.json has Bridge:Server:Port = $configured, not $UaPort. The firewall rule below opens $UaPort; edit one or the other so they agree."
+    }
+}
 
 Write-Host "Registering the $ServiceName service."
 New-Service -Name $ServiceName `
@@ -83,7 +112,8 @@ OPC UA Bridge is installed.
   Configuration      $InstallPath\appsettings.json
 
 Next steps:
-  1. Set Bridge:Upstream:EndpointUrl in appsettings.json, then restart the service.
+  1. Set Bridge:Upstream:EndpointUrl in $InstallPath\appsettings.json, then
+       Restart-Service $ServiceName
   2. To reuse the certificates OPC UA Exporter already had working:
        & '$exe' --import-exporter-certificates
   3. Capture the namespace from the dashboard. Until you do, the mirrored endpoint

@@ -72,13 +72,16 @@ public sealed class BridgeOptionsValidator : IValidateOptions<BridgeOptions>
         if (string.IsNullOrWhiteSpace(server.ApplicationName))
             failures.Add("Bridge:Server:ApplicationName is required.");
 
-        if (!server.AllowNoSecurity && !server.AllowAnonymous)
+        if (!server.AllowAnonymous)
         {
-            // Both off leaves no usable way in, and the failure would look like a
-            // certificate problem rather than a configuration one.
+            // Anonymous is the only user token policy the bridge offers, so turning it off
+            // leaves the endpoints advertising none at all and no downstream client able
+            // to activate a session. The failure would look like a certificate problem
+            // rather than a configuration one, so reject it here instead.
             failures.Add(
-                "Bridge:Server has neither AllowNoSecurity nor AllowAnonymous enabled, so no downstream " +
-                "client could authenticate. Enable one, or configure a user token policy.");
+                "Bridge:Server:AllowAnonymous is false, but anonymous is the only user token policy " +
+                "OPC UA Bridge offers, so no downstream client could activate a session. Leave it enabled, " +
+                "and restrict access with Bridge:Server:AllowNoSecurity and the server certificate trust list.");
         }
     }
 

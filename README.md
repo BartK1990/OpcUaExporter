@@ -150,7 +150,7 @@ minutes by default) those degrade to `BadNoCommunication`.
 | | |
 |---|---|
 | **Resilient upstream** | One session, keep-alive monitored, reconnected by the SDK's reconnect handler, with a watchdog for keep-alives that simply stop arriving. Exponential backoff with jitter. |
-| **Faithful mirror** | Same hierarchy, browse names and node identifiers as upstream; upstream namespace URIs registered as the bridge's own, so existing `ns=N;s=...` NodeIds keep resolving. |
+| **Faithful mirror** | Same hierarchy, browse names and node identifiers as upstream, with the upstream namespace URIs registered as the bridge's own. |
 | **Pinned namespace** | The address space is captured once to a JSON file and never changes until you explicitly capture it again — with a diff to confirm first. |
 | **Two acquisition modes** | **Subscription** (the server reports changes; the default, and far cheaper for both ends) or **Polling** at an interval you set, for servers whose subscription support is unreliable. |
 | **Write pass-through** | Downstream writes are forwarded upstream and the server's own status code is returned verbatim. Read-only upstream tags are read-only downstream. Nothing is ever queued. |
@@ -235,6 +235,17 @@ for a plant gateway has no business being reachable from the network. Binding
 `Bridge:Web:Urls` anywhere else without setting `Bridge:Web:AdminToken` fails
 startup rather than silently exposing it.
 
+When a token is set, every request needs it, as an `X-Admin-Token` header or a
+`?token=` query parameter (a browser then keeps it in a cookie for the rest of
+the session):
+
+```powershell
+Invoke-RestMethod http://bridge-host:5080/ -Headers @{ 'X-Admin-Token' = '<token>' }
+```
+
+This is a shared secret, not a user system — proportionate for a single-operator
+service, and not a substitute for keeping the dashboard off untrusted networks.
+
 | Page | |
 |---|---|
 | **Dashboard** | Upstream state, reconnect count, last error; downstream endpoint; acquisition throughput; namespace age |
@@ -316,6 +327,14 @@ namespace the server no longer publishes is reported on the dashboard.
 
 ### Limitations
 
+- **Namespace indexes shift by one or more.** Every OPC UA server's namespace
+  table starts with the standard namespace at 0 and its own application URI at
+  1, so the bridge's URI takes the slot the upstream server used for its first
+  namespace. A client that resolves nodes by namespace **URI** — the
+  spec-correct way — is unaffected. One with a literal `ns=2;s=Something` in its
+  configuration must be repointed at the bridge's index. The resolved table is
+  logged on every start, and mismatches are warned about unless you set
+  `Bridge:Server:WarnOnNamespaceIndexShift` to false.
 - Only variables and folders are mirrored. Methods, events, alarms and
   historical access are not.
 - Vendor-defined structured data types are mirrored as `BaseDataType` rather

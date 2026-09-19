@@ -53,11 +53,32 @@ public sealed class PollingAcquisitionEngine(
             await StopLoopAsync();
 
             _cycleCancellation = new CancellationTokenSource();
-            _pollingLoop = RunAsync(session, _cycleCancellation.Token);
+
+            // The loop runs for the engine's lifetime, so it cannot be awaited here. It
+            // can still fail before reaching the loop -- reading the server's operation
+            // limits, say -- and an unobserved fault would stop acquisition silently and
+            // then resurface much later out of StopAsync. Log it where it happens.
+            _pollingLoop = RunAndLogAsync(session, _cycleCancellation.Token);
         }
         finally
         {
             _gate.Release();
+        }
+    }
+
+    private async Task RunAndLogAsync(ISession session, CancellationToken ct)
+    {
+        try
+        {
+            await RunAsync(session, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // Ordinary stop.
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "Polling stopped because it could not start. No values will be read.");
         }
     }
 
@@ -93,23 +114,27 @@ public sealed class PollingAcquisitionEngine(
             nodeIds.Count, acquisition.PollingIntervalMs, chunks.Count, chunkSize, serverLimit);
 
         using var timer = new PeriodicTimer(interval, _time);
-        var cycleInFlight = 0;
 
         while (await SafeWaitAsync(timer, ct))
         {
-            // Never queue a cycle. If the server cannot keep up, a queue turns a slow
-            // server into an unbounded backlog and then an exhausted process; skipping
-            // keeps the bridge serving the freshest values it can actually get.
-            if (Interlocked.CompareExchange(ref cycleInFlight, 1, 0) != 0)
-            {
-                Statistics.RecordSkippedCycle();
-                WarnAboutOverrun(acquisition.PollingIntervalMs);
-                continue;
-            }
-
             try
             {
-                await RunCycleAsync(session, chunks, chunkSize, acquisition.MaxConcurrentReads, interval, ct);
+                var elapsed = await RunCycleAsync(
+                    session, chunks, chunkSize, acquisition.MaxConcurrentReads, interval, ct);
+
+                // Cycles are never queued: running one to completion before waiting for
+                // the next tick means a slow server simply gets polled less often, rather
+                // than building an unbounded backlog. PeriodicTimer discards the ticks
+                // that came due meanwhile, so count them here -- this is the number an
+                // operator needs to see that the interval is too tight for the tag count.
+                var missedTicks = (int)(elapsed.Ticks / interval.Ticks);
+                if (missedTicks > 0)
+                {
+                    for (var i = 0; i < missedTicks; i++)
+                        Statistics.RecordSkippedCycle();
+
+                    WarnAboutOverrun(acquisition.PollingIntervalMs);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -121,17 +146,14 @@ public sealed class PollingAcquisitionEngine(
                 // reconnection, and the next tick may well succeed.
                 logger.LogWarning(ex, "A polling cycle failed.");
             }
-            finally
-            {
-                Volatile.Write(ref cycleInFlight, 0);
-            }
         }
     }
 
     /// <summary>One read's worth of tags, prepared once and reused every cycle.</summary>
     private sealed record PollChunk(List<NodeId> NodeIds, List<int> TagIndexes);
 
-    private async Task RunCycleAsync(
+    /// <returns>How long the cycle took, so the caller can tell whether it overran.</returns>
+    private async Task<TimeSpan> RunCycleAsync(
         ISession session,
         IReadOnlyList<PollChunk> chunks,
         int chunkSize,
@@ -165,7 +187,10 @@ public sealed class PollingAcquisitionEngine(
                 }
             });
 
-        Statistics.RecordCycle(received, Stopwatch.GetElapsedTime(started), _time.GetUtcNow());
+        var elapsed = Stopwatch.GetElapsedTime(started);
+        Statistics.RecordCycle(received, elapsed, _time.GetUtcNow());
+
+        return elapsed;
     }
 
     /// <summary>A cycle may run long, but not indefinitely.</summary>

@@ -71,7 +71,8 @@ public sealed class OpcUaSessionFactory(
                 ct);
 
             session = createdSession as Session
-                ?? throw new InvalidOperationException("Session factory returned an unsupported session implementation.");
+                ?? throw new ServiceResultException(
+                    StatusCodes.BadInternalError, "Session factory returned an unsupported session implementation.");
         }
         catch (Exception ex)
         {
@@ -168,7 +169,13 @@ public sealed class OpcUaSessionFactory(
         using var discoveryClient = await DiscoveryClient.CreateAsync(config, discoveryUrl, ct: ct);
         var endpointDescriptions = await discoveryClient.GetEndpointsAsync([], ct);
         if (endpointDescriptions is null || endpointDescriptions.Count == 0)
-            throw new InvalidOperationException("No OPC UA endpoints were returned by the server.");
+        {
+            // A server that is still starting up answers discovery with an empty list, so
+            // this is a transient condition and must not be mistaken for a configuration
+            // error that no amount of retrying would fix.
+            throw new ServiceResultException(
+                StatusCodes.BadServerNotConnected, "No OPC UA endpoints were returned by the server.");
+        }
 
         var preferredMode = profile.SecurityMode switch
         {

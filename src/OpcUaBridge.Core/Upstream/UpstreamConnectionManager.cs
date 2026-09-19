@@ -114,41 +114,55 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
             TimeSpan.FromMilliseconds(upstream.ReconnectMinDelayMs),
             TimeSpan.FromMilliseconds(upstream.ReconnectMaxDelayMs));
 
-        while (!stoppingToken.IsCancellationRequested)
+        // Every wait below throws when the service stops, so the shutdown close has to sit
+        // in a finally: leaving the session open would strand it on the upstream server
+        // until its timeout expires, and DeleteSubscriptionsOnClose is off, so the server
+        // would hold thousands of monitored items too. A restart loop would stack those up.
+        try
         {
-            if (State is UpstreamConnectionState.Connected or UpstreamConnectionState.Reconnecting)
+            while (!stoppingToken.IsCancellationRequested)
             {
-                await WaitForWorkAsync(stoppingToken);
-                continue;
+                if (State is UpstreamConnectionState.Connected or UpstreamConnectionState.Reconnecting)
+                {
+                    await WaitForWorkAsync(stoppingToken);
+                    continue;
+                }
+
+                if (State == UpstreamConnectionState.Faulted)
+                {
+                    // Wait indefinitely for an operator to fix the cause and ask us to retry.
+                    await _reconnectRequested.WaitAsync(stoppingToken);
+                    SetState(UpstreamConnectionState.Disconnected);
+                    backoff.Reset();
+                    continue;
+                }
+
+                if (await TryConnectAsync(stoppingToken))
+                {
+                    backoff.Reset();
+                    continue;
+                }
+
+                if (State == UpstreamConnectionState.Faulted)
+                    continue;
+
+                var delay = backoff.Next();
+                _logger.LogWarning(
+                    "Upstream connect attempt {Attempt} failed; retrying in {DelaySeconds:F1}s. {Error}",
+                    backoff.Attempt, delay.TotalSeconds, _lastError);
+
+                await SafeDelayAsync(delay, stoppingToken);
             }
-
-            if (State == UpstreamConnectionState.Faulted)
-            {
-                // Wait indefinitely for an operator to fix the cause and ask us to retry.
-                await _reconnectRequested.WaitAsync(stoppingToken);
-                SetState(UpstreamConnectionState.Disconnected);
-                backoff.Reset();
-                continue;
-            }
-
-            if (await TryConnectAsync(stoppingToken))
-            {
-                backoff.Reset();
-                continue;
-            }
-
-            if (State == UpstreamConnectionState.Faulted)
-                continue;
-
-            var delay = backoff.Next();
-            _logger.LogWarning(
-                "Upstream connect attempt {Attempt} failed; retrying in {DelaySeconds:F1}s. {Error}",
-                backoff.Attempt, delay.TotalSeconds, _lastError);
-
-            await SafeDelayAsync(delay, stoppingToken);
         }
-
-        await CloseSessionAsync();
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            // Ordinary shutdown.
+        }
+        finally
+        {
+            CancelReconnect();
+            await CloseSessionAsync();
+        }
     }
 
     private async Task<bool> TryConnectAsync(CancellationToken ct)
@@ -349,8 +363,15 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
             };
         }
 
-        // Endpoint selection throws this when nothing matches the configured security
-        // mode, policy or authentication type -- a configuration error, not an outage.
+        // Endpoint selection throws a plain InvalidOperationException when nothing the
+        // server offers matches the configured security mode, policy or authentication
+        // type. That genuinely cannot resolve itself.
+        //
+        // Failures that only look like configuration errors must not land here. A server
+        // answering discovery with an empty endpoint list because it is still starting up
+        // raises a ServiceResultException instead, so it is classified above as transient:
+        // stranding the gateway in Faulted while the plant server merely reboots is the one
+        // thing it exists to ride out.
         return exception is InvalidOperationException;
     }
 
@@ -363,6 +384,13 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
             if (_session is not null)
             {
                 _logger.LogInformation("Reconnect requested by an operator.");
+
+                // Abandon any SDK reconnect already in flight. Its completion callback
+                // will not run for the session we are about to close, so this is the only
+                // place _reconnectInFlight can be cleared -- and leaving it set would
+                // silently disable the keep-alive handler and the watchdog for the rest
+                // of the process's life.
+                CancelReconnect();
                 await CloseSessionAsync();
                 SetState(UpstreamConnectionState.Disconnected);
             }
@@ -402,6 +430,25 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
 
         lock (_stateGate) _lastError = "Keep-alive watchdog timed out.";
         BeginReconnect(session);
+    }
+
+    /// <summary>Abandons an in-flight SDK reconnect and re-arms the keep-alive path.</summary>
+    private void CancelReconnect()
+    {
+        var handler = Interlocked.Exchange(ref _reconnectHandler, null);
+
+        try
+        {
+            handler?.CancelReconnect();
+            handler?.Dispose();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Cancelling the upstream reconnect handler reported an error.");
+        }
+
+        lock (_stateGate)
+            _reconnectInFlight = false;
     }
 
     private async Task SafeDelayAsync(TimeSpan delay, CancellationToken ct)

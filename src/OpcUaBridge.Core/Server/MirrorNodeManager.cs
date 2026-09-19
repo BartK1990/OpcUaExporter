@@ -38,6 +38,9 @@ public sealed class MirrorNodeManager : CustomNodeManager2
     /// <summary>Maps each snapshot namespace ordinal to this server's index for the same URI.</summary>
     private readonly ushort[] _mirrorNamespaceIndexes;
 
+    /// <summary>Snapshot entries skipped because another entry already claimed their NodeId.</summary>
+    private int _duplicateNodeIds;
+
     public MirrorNodeManager(
         IServerInternal server,
         ApplicationConfiguration configuration,
@@ -99,20 +102,29 @@ public sealed class MirrorNodeManager : CustomNodeManager2
             _logger.LogInformation(
                 "Mirrored address space built: {VariableCount} variable(s) under {NamespaceCount} namespace(s).",
                 _registry.Count, _mirrorNamespaceIndexes.Length);
+
+            if (_duplicateNodeIds > 0)
+            {
+                _logger.LogInformation(
+                    "{DuplicateCount} snapshot entr(ies) named a node already mirrored under the same NodeId, " +
+                    "which happens when the upstream address space reaches one node by several paths. " +
+                    "Each node is published once.",
+                    _duplicateNodeIds);
+            }
         }
     }
 
     /// <summary>
     /// Works out which of this server's namespace indexes corresponds to each of the
-    /// upstream server's, and reports whether they line up.
+    /// upstream server's, and reports where they differ.
     /// </summary>
     /// <remarks>
-    /// Spec-correct clients resolve namespaces by URI and do not care about the numbers.
-    /// Plenty of real ones have <c>ns=2;s=Something</c> written into a configuration file,
-    /// and for those the index is part of the contract. So the table is logged on every
-    /// start and any mismatch is reported loudly -- this failing quietly is the one thing
-    /// that would break a downstream client in a way nobody could diagnose from the
-    /// symptoms.
+    /// They generally do differ, and cannot be made not to: this server's namespace table
+    /// already holds the standard OPC UA namespace at 0 and its own application URI at 1
+    /// before any mirrored namespace is appended. A client resolving by namespace URI is
+    /// unaffected; one with a literal <c>ns=N;...</c> in its configuration is not, and
+    /// that failing quietly is the one thing nobody could diagnose from the symptoms. So
+    /// the resolved table is logged on every start, whatever the warning setting.
     /// </remarks>
     private void MapNamespaceIndexes()
     {
@@ -133,12 +145,13 @@ public sealed class MirrorNodeManager : CustomNodeManager2
                 misaligned.Add($"{uri} (upstream ns={ordinal}, bridge ns={index})");
         }
 
-        if (misaligned.Count > 0 && _options.PreserveNamespaceIndexes)
+        if (misaligned.Count > 0 && _options.WarnOnNamespaceIndexShift)
         {
             _logger.LogWarning(
-                "Namespace indexes could not be preserved for: {Misaligned}. Clients that resolve nodes by " +
-                "namespace URI are unaffected, but any client with a literal 'ns=N;...' NodeId configured for " +
-                "those namespaces must be updated to the bridge's index.",
+                "These mirrored namespaces have a different index here than upstream: {Misaligned}. " +
+                "Clients that resolve nodes by namespace URI are unaffected. Any client with a literal " +
+                "'ns=N;...' NodeId configured for those namespaces must be updated to the bridge's index. " +
+                "Set Bridge:Server:WarnOnNamespaceIndexShift to false to silence this.",
                 string.Join("; ", misaligned));
         }
     }
@@ -184,7 +197,13 @@ public sealed class MirrorNodeManager : CustomNodeManager2
         if (!_registry.TryGetTagByUpstreamIdentity(MirrorNamespaceUri(node), node.Identifier, out var tag))
             return;
 
+        // Redirected away from namespace 0 for the same reason folders are: this node
+        // manager does not own the standard OPC UA namespace, so a mirror NodeId in it
+        // would be routed to the core node manager and resolve to the bridge's own nodes
+        // rather than the mirrored ones.
         var namespaceIndex = MirrorNamespaceIndex(node);
+        if (namespaceIndex == 0)
+            namespaceIndex = BridgeNamespaceIndex;
 
         // The identifier is carried across verbatim, so a downstream client's existing
         // NodeId strings resolve against the bridge exactly as they did upstream.
@@ -215,10 +234,18 @@ public sealed class MirrorNodeManager : CustomNodeManager2
         if ((accessLevel & AccessLevels.CurrentWrite) != 0)
             variable.OnWriteValue = OnWriteMirrorValue;
 
+        // A node reached by two browse paths yields two snapshot entries with one identity.
+        // Publishing both would put two nodes under the same NodeId, so the second is
+        // skipped and the first keeps the mapping.
+        if (!_registry.SetMirrorNodeId(tag, mirrorNodeId))
+        {
+            _duplicateNodeIds++;
+            return;
+        }
+
         parent.AddChild(variable);
         AddPredefinedNode(SystemContext, variable);
 
-        _registry.SetMirrorNodeId(tag, mirrorNodeId);
         _nodesByTagIndex[tag.Index] = variable;
     }
 

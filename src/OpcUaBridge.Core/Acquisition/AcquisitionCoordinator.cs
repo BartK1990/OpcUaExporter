@@ -40,6 +40,7 @@ public sealed class AcquisitionCoordinator(
     AcquisitionEngineFactory engineFactory,
     TagRegistry registry,
     TagValueStore values,
+    TagStalenessMonitor staleness,
     IOptionsMonitor<BridgeOptions> options,
     ILogger<AcquisitionCoordinator> logger) : IHostedService
 {
@@ -106,6 +107,7 @@ public sealed class AcquisitionCoordinator(
             if (upstream is UpstreamConnectionManager manager)
                 manager.ReportMissingNamespaces(missing);
 
+            staleness.UpstreamRestored();
             await StartEngineAsync(e.Session, e.SubscriptionsTransferred, options.CurrentValue.Acquisition.Mode);
         }
         catch (Exception ex)
@@ -128,16 +130,16 @@ public sealed class AcquisitionCoordinator(
         await _engine.StartAsync(session, subscriptionsTransferred, ct);
     }
 
-    private void OnSessionLost(object? sender, EventArgs e)
-    {
-        var staleAfter = TimeSpan.FromSeconds(options.CurrentValue.Server.StaleAfterSeconds);
-        var affected = values.MarkStale(staleAfter);
-
-        if (affected > 0)
-        {
-            logger.LogWarning(
-                "Upstream link lost; {AffectedCount} cached value(s) are now flagged as no longer trustworthy.",
-                affected);
-        }
-    }
+    /// <summary>
+    /// Marks the cached values as no longer trustworthy, on the applier's thread.
+    /// </summary>
+    /// <remarks>
+    /// This event is raised from the SDK's keep-alive callback. Sweeping thousands of tags
+    /// inline there would block the very thread the rest of this code goes out of its way
+    /// to keep free, and allocate a value per tag at the worst possible moment. So the
+    /// handler only records that the link is down; <see cref="TagStalenessMonitor"/> does
+    /// the work, and keeps doing it so an outage that outlasts the grace period degrades
+    /// from uncertain to bad as promised.
+    /// </remarks>
+    private void OnSessionLost(object? sender, EventArgs e) => staleness.UpstreamLost();
 }

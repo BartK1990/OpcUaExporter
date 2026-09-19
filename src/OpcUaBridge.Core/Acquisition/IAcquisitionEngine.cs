@@ -10,6 +10,13 @@ public sealed class AcquisitionStatistics
     private long _cyclesCompleted;
     private long _cyclesSkipped;
 
+    // Written from the SDK's publish thread (one per subscription, concurrently) and from
+    // polling cycles; read from the Blazor circuit. Kept as 64-bit primitives written with
+    // Interlocked rather than a TimeSpan and a DateTimeOffset?, whose multi-word stores can
+    // be read torn -- which would render a nonsense age on the dashboard.
+    private long _lastCycleDurationTicks;
+    private long _lastUpdateUtcTicks;
+
     /// <summary>Values delivered since the service started.</summary>
     public long ValuesReceived => Interlocked.Read(ref _valuesReceived);
 
@@ -26,16 +33,23 @@ public sealed class AcquisitionStatistics
     /// </remarks>
     public long CyclesSkipped => Interlocked.Read(ref _cyclesSkipped);
 
-    public TimeSpan LastCycleDuration { get; private set; }
+    public TimeSpan LastCycleDuration => TimeSpan.FromTicks(Interlocked.Read(ref _lastCycleDurationTicks));
 
-    public DateTimeOffset? LastUpdateUtc { get; private set; }
+    public DateTimeOffset? LastUpdateUtc
+    {
+        get
+        {
+            var ticks = Interlocked.Read(ref _lastUpdateUtcTicks);
+            return ticks == 0 ? null : new DateTimeOffset(ticks, TimeSpan.Zero);
+        }
+    }
 
     public void RecordCycle(int valueCount, TimeSpan duration, DateTimeOffset completedUtc)
     {
         Interlocked.Add(ref _valuesReceived, valueCount);
         Interlocked.Increment(ref _cyclesCompleted);
-        LastCycleDuration = duration;
-        LastUpdateUtc = completedUtc;
+        Interlocked.Exchange(ref _lastCycleDurationTicks, duration.Ticks);
+        Interlocked.Exchange(ref _lastUpdateUtcTicks, completedUtc.UtcTicks);
     }
 
     public void RecordSkippedCycle() => Interlocked.Increment(ref _cyclesSkipped);

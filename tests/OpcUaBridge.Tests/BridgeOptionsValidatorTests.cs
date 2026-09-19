@@ -92,13 +92,24 @@ public class BridgeOptionsValidatorTests
     }
 
     [Fact]
-    public void Validate_RejectsAServerThatNoClientCouldConnectTo()
+    public void Validate_RejectsAServerNoClientCouldAuthenticateTo()
+    {
+        // Anonymous is the only user token policy the bridge offers, so turning it off
+        // leaves the endpoints advertising none and every downstream session refused --
+        // a failure that would look like a certificate problem.
+        var options = Valid();
+        options.Server.AllowAnonymous = false;
+
+        Assert.Contains(Failures(options), f => f.Contains("AllowAnonymous"));
+    }
+
+    [Fact]
+    public void Validate_AllowsASecureOnlyServer()
     {
         var options = Valid();
         options.Server.AllowNoSecurity = false;
-        options.Server.AllowAnonymous = false;
 
-        Assert.Contains(Failures(options), f => f.Contains("AllowNoSecurity"));
+        Assert.True(Validator.Validate(null, options).Succeeded);
     }
 
     [Fact]

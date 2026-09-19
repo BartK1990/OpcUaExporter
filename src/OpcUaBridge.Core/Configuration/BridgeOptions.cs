@@ -162,17 +162,25 @@ public sealed class MirrorServerOptions
     public bool AllowAnonymous { get; set; } = true;
 
     /// <summary>
-    /// Give each mirrored namespace the same index it has upstream.
+    /// Warn at startup about mirrored namespaces whose index differs from the upstream one.
     /// </summary>
     /// <remarks>
-    /// Spec-correct clients resolve namespaces by URI and do not care. Real ones
-    /// frequently have <c>ns=2;s=Something</c> written into a configuration file, and for
-    /// those the index is part of the contract -- so the default preserves it. The
-    /// resolved table is logged at startup and a mismatch is reported loudly, because
-    /// this failing quietly is the one thing that would break a downstream client in a
-    /// way nobody could diagnose.
+    /// <para>
+    /// The indexes cannot be made to match, and this option does not try. Every OPC UA
+    /// server's namespace table begins with the standard OPC UA namespace at 0 and its own
+    /// application URI at 1, so the bridge's own URI occupies the slot the upstream server
+    /// used for its first namespace, and everything after it shifts by at least one.
+    /// </para>
+    /// <para>
+    /// This matters because a downstream client with a literal <c>ns=2;s=Something</c> in
+    /// its configuration will break. Clients that resolve by namespace URI -- which is the
+    /// spec-correct way, and what the bridge itself does -- are unaffected. The resolved
+    /// table is logged on every start either way; this only controls whether a mismatch is
+    /// called out as a warning, which is worth silencing once you know your clients resolve
+    /// by URI.
+    /// </para>
     /// </remarks>
-    public bool PreserveNamespaceIndexes { get; set; } = true;
+    public bool WarnOnNamespaceIndexShift { get; set; } = true;
 
     /// <summary>How long a cached value keeps <c>UncertainLastUsableValue</c> before degrading to <c>BadNoCommunication</c>.</summary>
     [Range(0, 86_400)]
@@ -198,16 +206,6 @@ public sealed class SnapshotOptions
 {
     /// <summary>Overrides the snapshot location. Relative paths resolve against the executable's folder.</summary>
     public string? Path { get; set; }
-
-    /// <summary>
-    /// Browse the upstream server and write a snapshot when none exists yet.
-    /// </summary>
-    /// <remarks>
-    /// Off by default. The snapshot is the contract with the downstream app, and
-    /// capturing one is an operator decision, not something a service should do to itself
-    /// because a file happened to be missing.
-    /// </remarks>
-    public bool CaptureOnFirstRun { get; set; }
 
     public bool EnableParallelBrowse { get; set; } = true;
 

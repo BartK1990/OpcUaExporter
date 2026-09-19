@@ -58,14 +58,19 @@ try
     if (await BridgeCommands.TryRunAsync(app.Services, args))
         return 0;
 
+    // Before anything else, so no route -- static asset, Blazor circuit or page -- is
+    // reachable without the token when one is configured.
+    app.UseMiddleware<AdminTokenMiddleware>();
+
     app.UseStaticFiles();
     app.UseAntiforgery();
     app.MapRazorComponents<App>().AddInteractiveServerRenderMode();
 
-    var options = app.Services.GetRequiredService<IOptions<BridgeOptions>>().Value;
     Log.Information(
-        "OPC UA Bridge starting. Dashboard on {WebUrls}; state in {BaseDirectory}.",
-        webOptions.Urls, BridgePaths.Default.BaseDirectory);
+        "OPC UA Bridge starting. Dashboard on {WebUrls} ({Protection}); state in {BaseDirectory}.",
+        webOptions.Urls,
+        string.IsNullOrWhiteSpace(webOptions.AdminToken) ? "loopback only, no token" : "admin token required",
+        BridgePaths.Default.BaseDirectory);
 
     await app.RunAsync();
     return 0;

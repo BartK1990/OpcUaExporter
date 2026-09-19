@@ -89,18 +89,42 @@ public sealed class TagRegistry
         return DataTypeIds.BaseDataType;
     }
 
-    /// <summary>Records the NodeId the bridge's own server publishes a tag under.</summary>
-    public void SetMirrorNodeId(MirrorTag tag, NodeId mirrorNodeId)
+    /// <summary>
+    /// Records the NodeId the bridge's own server publishes a tag under.
+    /// </summary>
+    /// <returns>
+    /// False when that NodeId is already taken, which happens when the snapshot reached
+    /// the same upstream node by two paths. The caller skips the duplicate rather than
+    /// publishing two mirror nodes with one identity.
+    /// </returns>
+    public bool SetMirrorNodeId(MirrorTag tag, NodeId mirrorNodeId)
     {
+        if (!_byMirrorNodeId.TryAdd(mirrorNodeId, tag))
+            return false;
+
         tag.MirrorNodeId = mirrorNodeId;
-        _byMirrorNodeId[mirrorNodeId] = tag;
+        return true;
     }
 
     /// <summary>Finds a tag by the upstream identity recorded in the snapshot.</summary>
+    /// <remarks>
+    /// Built with an explicit first-wins loop rather than <c>ToDictionary</c>, because an
+    /// address space can legitimately reach the same node from two parents -- the browse
+    /// records each path it finds -- and <c>ToDictionary</c> would throw on the duplicate.
+    /// That exception surfaces while the mirrored address space is being built, so the
+    /// whole service would fail to start with a message about ports and certificates.
+    /// </remarks>
     public bool TryGetTagByUpstreamIdentity(string namespaceUri, string identifier, out MirrorTag tag)
     {
-        _byUpstreamIdentity ??= Tags.ToDictionary(
-            t => $"{t.UpstreamNamespaceUri}|{t.Identifier}", t => t, StringComparer.Ordinal);
+        if (_byUpstreamIdentity is null)
+        {
+            var index = new Dictionary<string, MirrorTag>(Tags.Count, StringComparer.Ordinal);
+
+            foreach (var candidate in Tags)
+                index.TryAdd($"{candidate.UpstreamNamespaceUri}|{candidate.Identifier}", candidate);
+
+            _byUpstreamIdentity = index;
+        }
 
         return _byUpstreamIdentity.TryGetValue($"{namespaceUri}|{identifier}", out tag!);
     }

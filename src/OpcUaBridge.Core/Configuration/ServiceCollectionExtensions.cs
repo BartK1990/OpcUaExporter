@@ -148,6 +148,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IUpstreamConnection>(p => p.GetRequiredService<UpstreamConnectionManager>());
         services.AddHostedService(p => p.GetRequiredService<UpstreamConnectionManager>());
 
+        services.AddSingleton<TagStalenessMonitor>();
+        services.AddHostedService(p => p.GetRequiredService<TagStalenessMonitor>());
+
         services.AddSingleton<AcquisitionEngineFactory>();
         services.AddSingleton<AcquisitionCoordinator>();
         services.AddHostedService(p => p.GetRequiredService<AcquisitionCoordinator>());
