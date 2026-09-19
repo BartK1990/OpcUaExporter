@@ -1,0 +1,13 @@
+{
+  "solution": {
+    "path": "OpcUaExporter.sln",
+    "projects": [
+      "src\\OpcUaShared\\OpcUaShared.csproj",
+      "src\\OpcUaExporter.Core\\OpcUaExporter.Core.csproj",
+      "src\\OpcUaExporter.UI\\OpcUaExporter.UI.csproj",
+      "src\\OpcUaBridge.Core\\OpcUaBridge.Core.csproj",
+      "tests\\OpcUaExporter.Tests\\OpcUaExporter.Tests.csproj",
+      "tests\\OpcUaBridge.Tests\\OpcUaBridge.Tests.csproj"
+    ]
+  }
+}

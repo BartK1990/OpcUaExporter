@@ -1,0 +1,34 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Gateway domain: the supervised upstream connection, the two acquisition
+    strategies, the persisted namespace snapshot, the tag value cache and the
+    mirrored OPC UA server.
+
+    Free of any hosting or UI dependency (no ASP.NET Core, no Serilog) so it can
+    be unit-tested on any OS. The host wires it up in OpcUaBridge.Server.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>OpcUaBridge</RootNamespace>
+    <AssemblyName>OpcUaBridge.Core</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="8.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="8.0.*" />
+    <!-- The client packages come in transitively via OpcUaShared; the server
+         library is this project's own, for the mirrored endpoint. -->
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Server" Version="1.5.*" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpcUaShared\OpcUaShared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpcUaBridge.Tests" />
+  </ItemGroup>
+
+</Project>
