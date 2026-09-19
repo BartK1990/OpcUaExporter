@@ -48,10 +48,12 @@ public sealed class SubscriptionAcquisitionEngine(
 
     /// <summary>Maps a monitored item's client handle to its dense tag index.</summary>
     /// <remarks>
-    /// Built once when items are created. Without it every incoming value would cost a
-    /// lookup through the subscription's own item collection, on the SDK's publish thread.
+    /// Read on the SDK's publish thread and rebuilt on reconnect, so it is replaced by
+    /// swapping the reference rather than mutated in place: a publish arriving from the
+    /// old session while the new one is being built would otherwise read a dictionary
+    /// mid-write, which is not merely stale but undefined.
     /// </remarks>
-    private readonly Dictionary<uint, int> _tagIndexByClientHandle = [];
+    private volatile Dictionary<uint, int> _tagIndexByClientHandle = [];
 
     public AcquisitionMode Mode => AcquisitionMode.Subscription;
 
@@ -177,15 +179,24 @@ public sealed class SubscriptionAcquisitionEngine(
         return subscription;
     }
 
+    /// <summary>
+    /// Records the client handles the SDK assigned, publishing them as one atomic swap.
+    /// </summary>
+    /// <remarks>
+    /// Client handles are only assigned once the items have been created, so this cannot
+    /// happen before <c>CreateAsync</c>.
+    /// </remarks>
     private void RecordClientHandles(Subscription subscription)
     {
-        // Client handles are assigned by the SDK when the items are created, so this has
-        // to happen after CreateAsync.
+        var updated = new Dictionary<uint, int>(_tagIndexByClientHandle);
+
         foreach (var item in subscription.MonitoredItems)
         {
             if (item.Handle is MirrorTag tag)
-                _tagIndexByClientHandle[item.ClientHandle] = tag.Index;
+                updated[item.ClientHandle] = tag.Index;
         }
+
+        _tagIndexByClientHandle = updated;
     }
 
     /// <summary>
@@ -203,9 +214,13 @@ public sealed class SubscriptionAcquisitionEngine(
         {
             var count = 0;
 
+            // One volatile read, so the whole publish is handled against a consistent map
+            // even if a reconnect swaps it mid-loop.
+            var tagIndexByClientHandle = _tagIndexByClientHandle;
+
             foreach (var item in notification.MonitoredItems)
             {
-                if (!_tagIndexByClientHandle.TryGetValue(item.ClientHandle, out var tagIndex))
+                if (!tagIndexByClientHandle.TryGetValue(item.ClientHandle, out var tagIndex))
                     continue;
 
                 values.Publish(tagIndex, item.Value);
@@ -254,7 +269,7 @@ public sealed class SubscriptionAcquisitionEngine(
         }
 
         _subscriptions.Clear();
-        _tagIndexByClientHandle.Clear();
+        _tagIndexByClientHandle = [];
     }
 
     public async ValueTask DisposeAsync()

@@ -78,9 +78,19 @@ public sealed class PollingAcquisitionEngine(
         var serverLimit = await OpcUaValueReader.GetMaxNodesPerReadAsync(session, ct);
         var chunkSize = Math.Max(1, Math.Min(acquisition.MaxNodesPerRead, serverLimit));
 
+        // Built once and reused every cycle. Slicing the tag list per chunk per cycle
+        // would allocate and re-enumerate thousands of entries a second for a result that
+        // never changes.
+        var chunks = BuildChunks(nodeIds.Count, chunkSize)
+            .Select(c => new PollChunk(
+                nodeIds.GetRange(c.Offset, c.Count),
+                tagIndexes.GetRange(c.Offset, c.Count)))
+            .ToList();
+
         logger.LogInformation(
-            "Polling {TagCount} tag(s) every {IntervalMs}ms in chunks of {ChunkSize} (server limit {ServerLimit}).",
-            nodeIds.Count, acquisition.PollingIntervalMs, chunkSize, serverLimit);
+            "Polling {TagCount} tag(s) every {IntervalMs}ms in {ChunkCount} chunk(s) of up to {ChunkSize} " +
+            "(server limit {ServerLimit}).",
+            nodeIds.Count, acquisition.PollingIntervalMs, chunks.Count, chunkSize, serverLimit);
 
         using var timer = new PeriodicTimer(interval, _time);
         var cycleInFlight = 0;
@@ -99,7 +109,7 @@ public sealed class PollingAcquisitionEngine(
 
             try
             {
-                await RunCycleAsync(session, nodeIds, tagIndexes, chunkSize, acquisition.MaxConcurrentReads, interval, ct);
+                await RunCycleAsync(session, chunks, chunkSize, acquisition.MaxConcurrentReads, interval, ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -118,10 +128,12 @@ public sealed class PollingAcquisitionEngine(
         }
     }
 
+    /// <summary>One read's worth of tags, prepared once and reused every cycle.</summary>
+    private sealed record PollChunk(List<NodeId> NodeIds, List<int> TagIndexes);
+
     private async Task RunCycleAsync(
         ISession session,
-        IReadOnlyList<NodeId> nodeIds,
-        IReadOnlyList<int> tagIndexes,
+        IReadOnlyList<PollChunk> chunks,
         int chunkSize,
         int maxConcurrentReads,
         TimeSpan interval,
@@ -133,7 +145,6 @@ public sealed class PollingAcquisitionEngine(
         cycleCancellation.CancelAfter(CycleTimeout(interval));
 
         var started = Stopwatch.GetTimestamp();
-        var chunks = BuildChunks(nodeIds.Count, chunkSize);
         var received = 0;
 
         await Parallel.ForEachAsync(
@@ -145,12 +156,11 @@ public sealed class PollingAcquisitionEngine(
             },
             async (chunk, token) =>
             {
-                var slice = nodeIds.Skip(chunk.Offset).Take(chunk.Count).ToList();
-                var results = await OpcUaValueReader.ReadValuesAsync(session, slice, chunk.Count, token);
+                var results = await OpcUaValueReader.ReadValuesAsync(session, chunk.NodeIds, chunkSize, token);
 
                 for (var i = 0; i < results.Length; i++)
                 {
-                    values.Publish(tagIndexes[chunk.Offset + i], results[i]);
+                    values.Publish(chunk.TagIndexes[i], results[i]);
                     Interlocked.Increment(ref received);
                 }
             });
