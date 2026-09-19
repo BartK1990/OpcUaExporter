@@ -213,6 +213,20 @@ public sealed class SnapshotOptions
 
     [Range(1, 32)]
     public int ParallelBrowseMaxDegree { get; set; } = 10;
+
+    /// <summary>
+    /// Mirror the upstream server's standard <c>Server</c> object -- its status,
+    /// capabilities and diagnostics -- alongside its data.
+    /// </summary>
+    /// <remarks>
+    /// Off by default. Every OPC UA server publishes that subtree, the bridge included, so
+    /// mirroring the upstream's would give a downstream client two of them: one describing
+    /// the bridge and one describing a different server, updated only as often as the
+    /// bridge polls it. On a real server it is also hundreds of nodes of diagnostics that
+    /// nobody asked the gateway to carry. The plant's data is what a downstream
+    /// application is here for.
+    /// </remarks>
+    public bool IncludeServerDiagnostics { get; set; }
 }
 
 /// <summary>Where the operator dashboard listens.</summary>

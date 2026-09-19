@@ -68,6 +68,17 @@ public sealed class NamespaceCaptureService(
 
         var tree = await browser.BrowseAsync(session, browseOptions, onVariableCountChanged: onVariableCountChanged, ct: ct);
 
+        if (!snapshotOptions.IncludeServerDiagnostics)
+        {
+            var removed = tree.RemoveAll(IsStandardServerObject);
+            if (removed > 0)
+            {
+                logger.LogInformation(
+                    "Excluded the upstream server's standard Server object from the capture. " +
+                    "Set Bridge:Snapshot:IncludeServerDiagnostics to mirror it as well.");
+            }
+        }
+
         var snapshot = SnapshotFactory.FromBrowseResult(tree, session, upstream.EndpointUrl);
         await ReadAccessLevelsAsync(session, snapshot, ct);
 
@@ -77,6 +88,12 @@ public sealed class NamespaceCaptureService(
 
         return snapshot;
     }
+
+    /// <summary>
+    /// Whether a browsed node is the standard <c>Server</c> object every OPC UA server has.
+    /// </summary>
+    private static bool IsStandardServerObject(OpcTag tag)
+        => NodeId.TryParse(tag.NodeId, out var nodeId) && nodeId == ObjectIds.Server;
 
     /// <summary>
     /// Fills in each variable's real AccessLevel, so a tag the plant server considers
