@@ -77,3 +77,33 @@ public class ArchitectureTests
         Assert.Contains(BridgeCore.GetReferencedAssemblies(), a => a.Name == "OpcUaShared");
     }
 }
+
+public class WebBindingTests
+{
+    [Theory]
+    [InlineData("http://localhost:5080", "http://127.0.0.1:5080")]
+    [InlineData("http://127.0.0.1:5080", "http://[::1]:5080")]
+    [InlineData("http://localhost:5080", "http://localhost:5080")]
+    public void AreEquivalent_TreatsEveryLoopbackSpellingAsTheSameEndpoint(string left, string right)
+    {
+        // Visual Studio's launch profile says localhost while the shipped configuration
+        // says 127.0.0.1. Warning about that pair would be noise on every run from the IDE.
+        Assert.True(OpcUaBridge.Host.WebBinding.AreEquivalent(left, right));
+    }
+
+    [Theory]
+    [InlineData("http://localhost:59907", "http://127.0.0.1:5080")]   // different port
+    [InlineData("https://localhost:5080", "http://127.0.0.1:5080")]   // different scheme
+    [InlineData("http://0.0.0.0:5080", "http://127.0.0.1:5080")]      // wildcard is not loopback
+    [InlineData("http://10.0.0.5:5080", "http://127.0.0.1:5080")]     // different host
+    public void AreEquivalent_IsFalseWhenARequestWouldLandSomewhereElse(string left, string right)
+    {
+        Assert.False(OpcUaBridge.Host.WebBinding.AreEquivalent(left, right));
+    }
+
+    [Fact]
+    public void AreEquivalent_TreatsAnAbsentValueAsNotMatchingAConfiguredOne()
+    {
+        Assert.False(OpcUaBridge.Host.WebBinding.AreEquivalent(null, "http://127.0.0.1:5080"));
+    }
+}

@@ -6,7 +6,8 @@
       "environmentVariables": {
         "ASPNETCORE_ENVIRONMENT": "Development"
       },
-      "applicationUrl": "https://localhost:59906;http://localhost:59907"
+      "//applicationUrl": "Must match Bridge:Web:Urls in appsettings.json. The host binds from that setting, not from here, so a different value would open a browser at an address nothing is listening on. There is no HTTPS profile because the bridge configures no certificate for Kestrel; its dashboard is loopback-only by default.",
+      "applicationUrl": "http://localhost:5080"
     }
   }
 }

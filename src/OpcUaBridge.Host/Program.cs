@@ -51,7 +51,24 @@ try
         .GetSection(BridgeOptions.SectionName)
         .Get<BridgeOptions>()?.Web ?? new WebOptions();
 
-    builder.WebHost.UseUrls(webOptions.Urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+    // Bridge:Web:Urls is the single source of truth for the binding, because the options
+    // validator's fail-closed check on non-loopback addresses is only meaningful if
+    // nothing else can quietly override it. That does mean it wins over ASPNETCORE_URLS
+    // and over a launchSettings.json profile, which would otherwise open a browser at an
+    // address nothing is listening on -- so say when the two disagree.
+    var configuredUrls = webOptions.Urls.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+    builder.WebHost.UseUrls(configuredUrls);
+
+    var environmentUrls = Environment.GetEnvironmentVariable("ASPNETCORE_URLS");
+    if (!string.IsNullOrWhiteSpace(environmentUrls) &&
+        !WebBinding.AreEquivalent(environmentUrls, webOptions.Urls))
+    {
+        Log.Warning(
+            "ASPNETCORE_URLS is {EnvironmentUrls}, but the dashboard binds {ConfiguredUrls} from " +
+            "Bridge:Web:Urls, which takes precedence. Change that setting, or the launchSettings.json " +
+            "profile, so the two agree.",
+            environmentUrls, webOptions.Urls);
+    }
 
     var app = builder.Build();
 
