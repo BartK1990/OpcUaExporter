@@ -4,6 +4,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Opc.Ua;
 using OpcUaBridge.Acquisition;
+using OpcUaBridge.Diagnostics;
 using OpcUaBridge.Namespaces;
 using OpcUaBridge.Server;
 using OpcUaBridge.Tags;
@@ -46,6 +47,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(paths);
 
         services.AddSingleton<DiagnosticsLogService>();
+        services.AddSingleton<ProcessCostSampler>();
         services.AddSingleton(TimeProvider.System);
 
         AddOpcUaClient(services, paths);

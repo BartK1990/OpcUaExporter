@@ -5,6 +5,8 @@
 @inject TagRegistry Registry
 @inject TagValueStore Values
 @inject BridgeServerHost ServerHost
+@inject BridgeServer Server
+@inject ProcessCostSampler Cost
 @inject INamespaceSnapshotStore SnapshotStore
 @inject IOptions<BridgeOptions> Options
 
@@ -43,7 +45,18 @@
             <dt>Endpoint</dt><dd>@(ServerHost.EndpointUrl ?? "—")</dd>
             <dt>Writes</dt><dd>@(Options.Value.Server.AllowWrites ? "Forwarded upstream" : "Rejected")</dd>
             <dt>Mirrored tags</dt><dd>@Registry.Count</dd>
+            <dt>Client sessions</dt><dd>@_downstream.Sessions</dd>
+            <dt>Subscriptions</dt><dd>@_downstream.Subscriptions</dd>
+            <dt>Monitored tags</dt><dd>@_downstream.MonitoredItems</dd>
         </dl>
+        @if (_downstream.Sessions > 0 && Registry.Count > 0 && _downstream.MonitoredItems * 4 < Registry.Count)
+        {
+            <p class="note">
+                The applications behind the bridge are monitoring @_downstream.MonitoredItems of
+                @Registry.Count mirrored tags. The rest are still acquired upstream, which is what
+                keeps a value ready the moment something asks for one.
+            </p>
+        }
     </section>
 
     <section class="card">
@@ -51,6 +64,7 @@
         <p class="headline">@(Acquisition.Engine?.Mode.ToString() ?? "Idle")</p>
         <dl>
             <dt>Values received</dt><dd>@(_statistics?.ValuesReceived ?? 0)</dd>
+            <dt>Values per second</dt><dd>@_valuesPerSecond.ToString("N0")</dd>
             <dt>Cycles</dt><dd>@(_statistics?.CyclesCompleted ?? 0)</dd>
             @if (_statistics?.CyclesSkipped > 0)
             {
@@ -91,18 +105,49 @@
             </p>
         }
     </section>
+
+    <section class="card">
+        <h2>Runtime cost</h2>
+        <p class="headline">@_cost.CpuPercentOfMachine.ToString("F1")% CPU</p>
+        <dl>
+            <dt>Of one core</dt><dd>@_cost.CpuPercentOfCore.ToString("F1")%</dd>
+            <dt>Cores</dt><dd>@Environment.ProcessorCount</dd>
+            <dt>Working set</dt><dd>@Megabytes(_cost.WorkingSetBytes)</dd>
+            <dt>Managed heap</dt><dd>@Megabytes(_cost.ManagedHeapBytes)</dd>
+            <dt>Threads</dt><dd>@_cost.ThreadCount</dd>
+            <dt>Collections</dt><dd>gen0 @_cost.Gen0Collections / gen2 @_cost.Gen2Collections</dd>
+        </dl>
+        <p class="note">
+            This process only, measured over the last second. The headline is the share of
+            the whole machine, which is what Task Manager reports. Read it beside the value
+            rate above: cost that tracks the rate is the bridge doing its job; cost with no
+            rate to match it is not.
+        </p>
+    </section>
 </div>
 
 @code {
     private UpstreamStatus _status = null!;
     private AcquisitionStatistics? _statistics;
     private NamespaceSnapshot? _snapshot;
+    private DownstreamActivity _downstream = DownstreamActivity.None;
+    private ProcessCost _cost = EmptyCost;
     private PeriodicTimer? _timer;
+
+    private long _lastValuesReceived;
+    private double _valuesPerSecond;
+
+    private static readonly ProcessCost EmptyCost = new(TimeSpan.Zero, 0, 0, 0, 0, 0, 0, 0);
 
     protected override async Task OnInitializedAsync()
     {
         _status = Upstream.Status;
         _snapshot = await SnapshotStore.LoadAsync();
+        _lastValuesReceived = Acquisition.Engine?.Statistics.ValuesReceived ?? 0;
+
+        // Primes the sampler so the first displayed figure covers one tick rather than
+        // the whole time since the process started, which would read as near zero.
+        Cost.Sample();
 
         // Polled on a timer rather than driven by an event per value. At a few thousand
         // tags, re-rendering on every update would saturate the SignalR circuit with
@@ -119,6 +164,15 @@
             {
                 _status = Upstream.Status;
                 _statistics = Acquisition.Engine?.Statistics;
+                _downstream = Server.GetDownstreamActivity();
+                _cost = Cost.Sample();
+
+                var received = _statistics?.ValuesReceived ?? 0;
+                _valuesPerSecond = _cost.Window > TimeSpan.Zero
+                    ? Math.Max(0, received - _lastValuesReceived) / _cost.Window.TotalSeconds
+                    : 0;
+                _lastValuesReceived = received;
+
                 await InvokeAsync(StateHasChanged);
             }
         }
@@ -129,6 +183,8 @@
     }
 
     private void Reconnect() => Upstream.RequestReconnect();
+
+    private static string Megabytes(long bytes) => $"{bytes / 1024d / 1024d:N0} MB";
 
     private string StateClass => _status.State switch
     {

@@ -28,6 +28,39 @@ public sealed class BridgeServer(
         return new MasterNodeManager(server, configuration, dynamicNamespaceUri: null, [NodeManager]);
     }
 
+    /// <summary>
+    /// How much of the mirror the downstream applications are actually using.
+    /// </summary>
+    /// <remarks>
+    /// Read straight off the SDK's session and subscription managers rather than counted
+    /// as sessions come and go: a counter maintained here would drift the first time a
+    /// client vanished without closing its session, which is the case that matters.
+    /// </remarks>
+    public DownstreamActivity GetDownstreamActivity()
+    {
+        // Null until the server has started, and again once it has stopped.
+        var instance = ServerInternal;
+        if (instance is null)
+            return DownstreamActivity.None;
+
+        try
+        {
+            var sessions = instance.SessionManager.GetSessions().Count;
+            var subscriptions = instance.SubscriptionManager.GetSubscriptions();
+
+            var monitoredItems = 0;
+            foreach (var subscription in subscriptions)
+                monitoredItems += subscription.MonitoredItemCount;
+
+            return new DownstreamActivity(sessions, subscriptions.Count, monitoredItems);
+        }
+        catch (Exception)
+        {
+            // Racing a shutdown. The dashboard asking for a count is never worth a fault.
+            return DownstreamActivity.None;
+        }
+    }
+
     protected override ServerProperties LoadServerProperties() => new()
     {
         ManufacturerName = "OPC UA Exporter project",

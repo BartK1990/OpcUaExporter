@@ -65,6 +65,31 @@ public sealed class BridgeOptionsValidator : IValidateOptions<BridgeOptions>
             failures.Add(
                 "Bridge:Acquisition:SamplingIntervalMs must be positive, or -1 to follow the publishing interval.");
         }
+
+        // Zero is legal OPC UA and means "as fast as this server can manage". Set by hand
+        // it reads like a default, and on a few thousand tags it asks the plant server --
+        // the one already struggling, or this gateway would not exist -- for its fastest
+        // possible sampling rate. -1 is the setting somebody reaching for "don't care"
+        // actually wants.
+        if (acquisition.SamplingIntervalMs == 0)
+        {
+            failures.Add(
+                "Bridge:Acquisition:SamplingIntervalMs is 0, which asks the upstream server to sample every " +
+                "tag as fast as it can rather than at a rate you chose. Set a millisecond interval, or -1 to " +
+                "follow the publishing interval.");
+        }
+
+        if (acquisition.PublishingIntervalMs <= 0)
+        {
+            failures.Add(
+                $"Bridge:Acquisition:PublishingIntervalMs ({acquisition.PublishingIntervalMs}) must be positive.");
+        }
+
+        if (acquisition.Mode == AcquisitionMode.Polling && acquisition.PollingIntervalMs <= 0)
+        {
+            failures.Add(
+                $"Bridge:Acquisition:PollingIntervalMs ({acquisition.PollingIntervalMs}) must be positive.");
+        }
     }
 
     private static void ValidateServer(MirrorServerOptions server, List<string> failures)

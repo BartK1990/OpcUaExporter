@@ -248,10 +248,22 @@ service, and not a substitute for keeping the dashboard off untrusted networks.
 
 | Page | |
 |---|---|
-| **Dashboard** | Upstream state, reconnect count, last error; downstream endpoint; acquisition throughput; namespace age |
+| **Dashboard** | Upstream state, reconnect count, last error; downstream endpoint and what clients are monitoring; acquisition throughput; namespace age; this process's CPU, memory and GC |
 | **Tags** | Every mirrored tag with its live value, status and source timestamp, filterable |
 | **Namespace** | Capture, diff, apply |
 | **Diagnostics** | Recent OPC UA client activity, and where the log files are |
+
+The dashboard's **Runtime cost** card reports this process's own processor time, as a share
+of the whole machine (the number Task Manager shows) and of one core. Read it next to
+**Values per second** on the acquisition card: cost that tracks the value rate is the
+gateway doing its job, and cost with no rate to match it is not — in which case check
+whether the upstream link is up at all, because a connection that keeps failing and
+retrying looks busy without moving a single value.
+
+**Downstream / Monitored tags** is the other number worth knowing. It counts the mirrored
+tags the applications behind the bridge actually subscribe to. Every other tag is still
+acquired upstream, which is deliberate: it is what keeps a value ready the moment
+something asks for one, including during an outage.
 
 ### Command line
 

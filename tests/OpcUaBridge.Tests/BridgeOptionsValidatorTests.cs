@@ -40,6 +40,52 @@ public class BridgeOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_RejectsASamplingIntervalOfZero()
+    {
+        // Legal OPC UA, and it means "as fast as this server can manage". Typed by hand it
+        // reads like a default, so it is rejected rather than quietly asking an already
+        // struggling plant server for its fastest rate on every tag.
+        var options = Valid();
+        options.Acquisition.SamplingIntervalMs = 0;
+
+        Assert.Contains(Failures(options), f => f.Contains("SamplingIntervalMs"));
+    }
+
+    [Fact]
+    public void Validate_AcceptsMinusOneAsTheSamplingInterval()
+    {
+        var options = Valid();
+        options.Acquisition.SamplingIntervalMs = -1;
+
+        Assert.DoesNotContain(Failures(options), f => f.Contains("SamplingIntervalMs"));
+    }
+
+    [Fact]
+    public void Validate_RejectsANonPositivePublishingInterval()
+    {
+        var options = Valid();
+        options.Acquisition.PublishingIntervalMs = 0;
+
+        Assert.Contains(Failures(options), f => f.Contains("PublishingIntervalMs"));
+    }
+
+    [Fact]
+    public void Validate_RejectsANonPositivePollingIntervalOnlyInPollingMode()
+    {
+        var polling = Valid();
+        polling.Acquisition.Mode = AcquisitionMode.Polling;
+        polling.Acquisition.PollingIntervalMs = 0;
+
+        Assert.Contains(Failures(polling), f => f.Contains("PollingIntervalMs"));
+
+        // An unused polling interval is not worth refusing to start over.
+        var subscription = Valid();
+        subscription.Acquisition.PollingIntervalMs = 0;
+
+        Assert.DoesNotContain(Failures(subscription), f => f.Contains("PollingIntervalMs"));
+    }
+
+    [Fact]
     public void Validate_RejectsABackoffWindowThatRunsBackwards()
     {
         var options = Valid();
