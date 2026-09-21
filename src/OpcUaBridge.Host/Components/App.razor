@@ -1,3 +1,4 @@
+@using Microsoft.AspNetCore.Components.Web
 <!DOCTYPE html>
 <html lang="en" data-bs-theme="dark">
 <head>
@@ -6,10 +7,14 @@
     <title>OPC UA Bridge</title>
     <base href="/" />
     <link rel="stylesheet" href="css/app.css" />
-    <HeadOutlet />
+    @* InteractiveServer is not optional here. AddInteractiveServerRenderMode() on the
+       endpoint only makes the mode available; a .NET 8 Blazor Web App renders components
+       statically unless they opt in, and a statically rendered page still returns 200
+       while every @onclick, @bind and timer-driven refresh silently does nothing. *@
+    <HeadOutlet @rendermode="RenderMode.InteractiveServer" />
 </head>
 <body>
-    <Routes />
+    <Routes @rendermode="RenderMode.InteractiveServer" />
     <script src="_framework/blazor.web.js"></script>
 </body>
 </html>

@@ -39,6 +39,15 @@
     <Content Update="appsettings*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
+    <!--
+      The host sets ContentRootPath to AppContext.BaseDirectory so a Windows service does
+      not resolve paths into C:\Windows\System32. That makes the web root <exe>\wwwroot,
+      but the Web SDK only copies wwwroot on publish, so a plain build or `dotnet run`
+      would serve no stylesheet at all and the dashboard would render unstyled.
+    -->
+    <Content Update="wwwroot\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
     <Content Include="..\..\deploy\*.ps1" Link="deploy\%(Filename)%(Extension)">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

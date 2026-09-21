@@ -151,7 +151,16 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
                     "Upstream connect attempt {Attempt} failed; retrying in {DelaySeconds:F1}s. {Error}",
                     backoff.Attempt, delay.TotalSeconds, _lastError);
 
-                await SafeDelayAsync(delay, stoppingToken);
+                // Wait on the operator's request rather than a plain timer, so "Reconnect
+                // now" works while a connection is failing. That is exactly when it is
+                // reached for -- an operator who has just fixed a certificate or an
+                // endpoint should not sit through the remaining backoff wondering whether
+                // the button did anything.
+                if (await WaitForRetrySignalAsync(delay, stoppingToken))
+                {
+                    _logger.LogInformation("Reconnect requested by an operator; retrying immediately.");
+                    backoff.Reset();
+                }
             }
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -452,10 +461,20 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
             _reconnectInFlight = false;
     }
 
-    private async Task SafeDelayAsync(TimeSpan delay, CancellationToken ct)
+    /// <summary>
+    /// Waits out the backoff, returning early when an operator asks to retry.
+    /// </summary>
+    /// <returns>True when the wait was cut short by a reconnect request.</returns>
+    private async Task<bool> WaitForRetrySignalAsync(TimeSpan delay, CancellationToken ct)
     {
-        try { await Task.Delay(delay, _time, ct); }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        try
+        {
+            return await _reconnectRequested.WaitAsync(delay, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private void SetState(UpstreamConnectionState state)
