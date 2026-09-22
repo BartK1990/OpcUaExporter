@@ -68,6 +68,20 @@ public static class BridgeCommands
         var options = services.GetRequiredService<IOptions<BridgeOptions>>().Value;
         var paths = services.GetRequiredService<BridgePaths>();
 
+        Console.WriteLine("Settings files, in the order they override one another:");
+
+        foreach (var file in BridgeConfiguration.DescribeFiles(paths.BaseDirectory))
+        {
+            var state = file.Exists
+                ? "loaded"
+                : file.Required ? "MISSING" : "not present";
+
+            Console.WriteLine($"  {file.Role,-20}{state,-13}{file.Path}");
+        }
+
+        Console.WriteLine($"  {"Environment",-20}{"applied",-13}OPCUABRIDGE_* variables, then command-line switches");
+        Console.WriteLine();
+
         Console.WriteLine($"""
             Paths
               Install directory   {paths.BaseDirectory}

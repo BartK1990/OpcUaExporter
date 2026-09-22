@@ -365,3 +365,7 @@ FodyWeavers.xsd
 src/OpcUaBridge.Host/Logs/
 src/OpcUaBridge.Host/config/
 src/OpcUaBridge.Host/pki/
+
+# One installation's own gateway settings: written by hand on the machine the
+# bridge runs on, never shipped and never committed.
+appsettings.production.json

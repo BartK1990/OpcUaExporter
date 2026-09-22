@@ -36,6 +36,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      appsettings.production.json holds one installation's own settings. It is written by
+      hand on the machine the gateway runs on, is not in source control, and must never be
+      built or published from here: a copy that shipped in a release package would
+      overwrite the real one the first time somebody extracted an upgrade over the install
+      folder. Removed rather than merely ignored, because the Web SDK globs
+      appsettings.*.json into Content automatically.
+    -->
+    <Content Remove="appsettings.production.json" />
+    <None Remove="appsettings.production.json" />
+
     <Content Update="appsettings*.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>

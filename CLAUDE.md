@@ -144,7 +144,8 @@ Namespace `OpcUaBridge`. No hosting or UI dependency, so all of it is testable o
 
 - **Program.cs** — sets the working directory to `AppContext.BaseDirectory` as its **first statement**, then builds the host with an explicit `ContentRootPath`. Both are needed; see the comment there.
 - **BridgeLogging.cs** — Serilog, configured in code so the 30 MB / 10 file limits cannot be lost to a careless `appsettings.json` edit. The file sink is asynchronous and non-blocking because a disk stall must never hold up the SDK's publish thread.
-- **BridgeCommands.cs** — `--check-config`, `--check-pki`, `--import-exporter-certificates`, `--show-namespace`.
+- **BridgeConfiguration.cs** — the settings layers and the order they override each other: `appsettings.json` (shipped, replaced by the next release) → `appsettings.production.json` beside the exe (one installation's own settings, never in the repo or a release package, so an upgrade cannot overwrite it) → `config\appsettings.Local.json` (a developer's override) → `OPCUABRIDGE_*` environment variables → the command line. `WebApplication.CreateBuilder` has already added `appsettings.json` and `appsettings.{Environment}.json` against its own content root — and on a default install the environment *is* `Production` — so these are re-added explicitly against `AppContext.BaseDirectory` to make the order deterministic and the same off Windows. They are not duplicates; a test pins the precedence.
+- **BridgeCommands.cs** — `--check-config` (which also prints each settings file and whether it was found), `--check-pki`, `--import-exporter-certificates`, `--show-namespace`.
 - **Components/Pages/** — Dashboard, Tags (virtualized), Namespace (capture with diff and confirm), Diagnostics.
 
 ### Key flows to know before changing gateway code

@@ -23,12 +23,8 @@ try
         WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot")
     });
 
-    builder.Configuration
-        .SetBasePath(AppContext.BaseDirectory)
-        .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-        .AddJsonFile(Path.Combine("config", "appsettings.Local.json"), optional: true, reloadOnChange: true)
-        .AddEnvironmentVariables("OPCUABRIDGE_")
-        .AddCommandLine(args);
+    // Order matters and is pinned by a test; see BridgeConfiguration.
+    builder.Configuration.AddBridgeConfiguration(AppContext.BaseDirectory, args);
 
     // A no-op when the process is not running under the service control manager, so the
     // same executable runs from a console for debugging.

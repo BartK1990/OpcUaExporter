@@ -174,20 +174,35 @@ those too.
 
 ### Setting it up
 
-**1. Point it at your server.** Edit `appsettings.json`:
+**1. Point it at your server.** Create `appsettings.production.json` beside
+`OpcUaBridge.exe` and put this installation's own settings in it:
 
 ```jsonc
-"Bridge": {
-  "Upstream": {
-    "EndpointUrl": "opc.tcp://plant-server:4840",
-    "SecurityMode": "SignAndEncrypt",
-    "SecurityPolicy": "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256",
-    "AuthenticationType": "Anonymous"
+{
+  "Bridge": {
+    "Upstream": {
+      "EndpointUrl": "opc.tcp://plant-server:4840",
+      "SecurityMode": "SignAndEncrypt",
+      "SecurityPolicy": "http://opcfoundation.org/UA/SecurityPolicy#Basic256Sha256",
+      "AuthenticationType": "Anonymous"
+    }
   }
 }
 ```
 
 Then `Restart-Service OpcUaBridge`.
+
+Put only the settings that differ from the shipped defaults in here: it is merged
+over `appsettings.json` key by key, so everything you leave out keeps whatever the
+release ships. Confirm it was picked up with
+`& 'C:\OpcUaBridge\OpcUaBridge.exe' --check-config`, which prints each settings
+file and whether it was found.
+
+**Why not edit `appsettings.json`?** That file ships with the release, so extracting
+an upgrade over the install folder replaces it and takes your endpoint, ports and
+credentials with it. `appsettings.production.json` is never in a release package and
+is never overwritten, which is what makes an upgrade a file copy rather than a
+reconfiguration.
 
 **2. Reuse the certificates you already have working.** If OPC UA Exporter
 already connects to this server from this machine, the bridge can use the same
@@ -372,7 +387,8 @@ portable folder:
 ```
 C:\OpcUaBridge\
   OpcUaBridge.exe
-  appsettings.json
+  appsettings.json             shipped defaults — replaced by the next release
+  appsettings.production.json  this installation's settings — yours, never shipped
   Logs\                    opcua-bridge.log — 30 MB per file, 10 files kept
   config\
     namespace.json         the captured address space
