@@ -40,6 +40,62 @@ public class BridgeOptionsValidatorTests
     }
 
     [Fact]
+    public void Validate_EnforcesRangeAttributesOnTheNestedSections()
+    {
+        // AddOptions().ValidateDataAnnotations() only inspects BridgeOptions' own
+        // properties, every one of which is a nested object with no attribute on it. These
+        // bounds are only real because this validator applies them itself.
+        var options = Valid();
+        options.Acquisition.MaxItemsPerSubscription = 100_000;
+
+        Assert.Contains(Failures(options), f => f.Contains("Bridge:Acquisition:MaxItemsPerSubscription"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(70_000)]
+    public void Validate_RejectsAServerPortOutsideTheLegalRange(int port)
+    {
+        var options = Valid();
+        options.Server.Port = port;
+
+        Assert.Contains(Failures(options), f => f.Contains("Bridge:Server:Port"));
+    }
+
+    [Fact]
+    public void Validate_RejectsAKeepAliveIntervalTooShortToBeMeaningful()
+    {
+        var options = Valid();
+        options.Upstream.KeepAliveIntervalMs = 1;
+
+        Assert.Contains(Failures(options), f => f.Contains("Bridge:Upstream:KeepAliveIntervalMs"));
+    }
+
+    [Fact]
+    public void Validate_NamesTheConfigurationKeyNotTheClrProperty()
+    {
+        // "The field MaxItemsPerSubscription must be between 1 and 50000" is not something
+        // anybody can search an appsettings.json for.
+        var options = Valid();
+        options.Acquisition.QueueSize = 0;
+
+        var failure = Assert.Single(Failures(options), f => f.Contains("QueueSize"));
+
+        Assert.StartsWith("Bridge:Acquisition:QueueSize", failure);
+    }
+
+    [Fact]
+    public void Validate_AcceptsALargeButLegalSubscriptionSize()
+    {
+        // 50000 is the documented ceiling and has to stay usable: at 64000 tags it is the
+        // difference between 65 publish pipelines and 2.
+        var options = Valid();
+        options.Acquisition.MaxItemsPerSubscription = 50_000;
+
+        Assert.True(Validator.Validate(null, options).Succeeded);
+    }
+
+    [Fact]
     public void Validate_RejectsASamplingIntervalOfZero()
     {
         // Legal OPC UA, and it means "as fast as this server can manage". Typed by hand it
@@ -70,19 +126,20 @@ public class BridgeOptionsValidatorTests
     }
 
     [Fact]
-    public void Validate_RejectsANonPositivePollingIntervalOnlyInPollingMode()
+    public void Validate_RejectsANonPositivePollingIntervalInEitherMode()
     {
-        var polling = Valid();
-        polling.Acquisition.Mode = AcquisitionMode.Polling;
-        polling.Acquisition.PollingIntervalMs = 0;
+        // The [Range] attribute bounds this at 50ms and says nothing about the mode, so it
+        // is rejected whether or not the interval is currently in use. A configuration
+        // holding a value that could never work is worth refusing at startup rather than
+        // the first time somebody switches mode to diagnose something.
+        foreach (var mode in new[] { AcquisitionMode.Polling, AcquisitionMode.Subscription })
+        {
+            var options = Valid();
+            options.Acquisition.Mode = mode;
+            options.Acquisition.PollingIntervalMs = 0;
 
-        Assert.Contains(Failures(polling), f => f.Contains("PollingIntervalMs"));
-
-        // An unused polling interval is not worth refusing to start over.
-        var subscription = Valid();
-        subscription.Acquisition.PollingIntervalMs = 0;
-
-        Assert.DoesNotContain(Failures(subscription), f => f.Contains("PollingIntervalMs"));
+            Assert.Contains(Failures(options), f => f.Contains("PollingIntervalMs"));
+        }
     }
 
     [Fact]

@@ -66,6 +66,7 @@
             <dt>Values received</dt><dd>@(_statistics?.ValuesReceived ?? 0)</dd>
             <dt>Values per second</dt><dd>@_valuesPerSecond.ToString("N0")</dd>
             <dt>Publishes per second</dt><dd class="@PublishRateClass">@_publishesPerSecond.ToString("N0")</dd>
+            <dt>Subscriptions</dt><dd>@_subscriptionCount</dd>
             <dt>Cycles</dt><dd>@(_statistics?.CyclesCompleted ?? 0)</dd>
             @if (_statistics?.CyclesSkipped > 0)
             {
@@ -150,11 +151,16 @@
     private ProcessCost _cost = EmptyCost;
     private PeriodicTimer? _timer;
 
-    private long _lastValuesReceived;
-    private double _valuesPerSecond;
-    private long _lastPublishesReceived;
-    private double _publishesPerSecond;
     private int _subscriptionCount;
+
+    // Averaged over ten seconds rather than taken from the last tick: with a publishing
+    // interval longer than the refresh, a per-tick rate alternates between zero and double
+    // and reads as a gateway that keeps stopping.
+    private readonly RateWindow _values = new(TimeSpan.FromSeconds(10));
+    private readonly RateWindow _publishes = new(TimeSpan.FromSeconds(10));
+
+    private double _valuesPerSecond => _values.PerSecond;
+    private double _publishesPerSecond => _publishes.PerSecond;
 
     private static readonly ProcessCost EmptyCost = new(TimeSpan.Zero, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
@@ -162,8 +168,6 @@
     {
         _status = Upstream.Status;
         _snapshot = await SnapshotStore.LoadAsync();
-        _lastValuesReceived = Acquisition.Engine?.Statistics.ValuesReceived ?? 0;
-        _lastPublishesReceived = Acquisition.Engine?.Statistics.PublishesReceived ?? 0;
 
         // Primes the sampler so the first displayed figure covers one tick rather than
         // the whole time since the process started, which would read as near zero.
@@ -187,20 +191,13 @@
                 _downstream = Server.GetDownstreamActivity();
                 _cost = Cost.Sample();
 
-                var received = _statistics?.ValuesReceived ?? 0;
-                var published = _statistics?.PublishesReceived ?? 0;
+                var now = DateTimeOffset.UtcNow;
+                _values.Add(_statistics?.ValuesReceived ?? 0, now);
+                _publishes.Add(_statistics?.PublishesReceived ?? 0, now);
+
                 _subscriptionCount = Math.Max(1,
                     (Registry.Count + Options.Value.Acquisition.MaxItemsPerSubscription - 1)
                         / Math.Max(1, Options.Value.Acquisition.MaxItemsPerSubscription));
-
-                if (_cost.Window > TimeSpan.Zero)
-                {
-                    _valuesPerSecond = Math.Max(0, received - _lastValuesReceived) / _cost.Window.TotalSeconds;
-                    _publishesPerSecond = Math.Max(0, published - _lastPublishesReceived) / _cost.Window.TotalSeconds;
-                }
-
-                _lastValuesReceived = received;
-                _lastPublishesReceived = published;
 
                 await InvokeAsync(StateHasChanged);
             }

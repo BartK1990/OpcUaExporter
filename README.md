@@ -313,6 +313,14 @@ So when the bridge costs more CPU than you want, reduce the **rate**, in this or
    default of 1000 ms is already conservative; check it has not been lowered.
 3. **Capture a smaller namespace.** Tags the downstream application will never read cost
    an acquisition and a mirror update each time they change.
+4. **`Bridge:Acquisition:MaxItemsPerSubscription`** — this divides the tag count into that
+   many subscriptions, and the SDK keeps a publish request outstanding for each one. At
+   64 000 tags the default of 1000 means 65 publish pipelines; 10 000 means 7. Measured at
+   64 314 tags and 740 values/s, going from 65 subscriptions to 7 took publishes from 7/s
+   to 1/s and thread-pool work items from 146/s to 62/s. The maximum is **50 000** — the
+   service refuses to start above it, because one subscription holding everything
+   serialises publish handling behind a single pipeline and loses the whole address space
+   at once if the server drops it. 10 000 is a good default for a large namespace.
 
 Two cautions on the deadband. It is a deliberate decision to stop mirroring the upstream
 server exactly — the mirror then holds the last value *outside* the band, not the last

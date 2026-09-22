@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.Extensions.Options;
 
 namespace OpcUaBridge.Configuration;
@@ -16,6 +17,17 @@ public sealed class BridgeOptionsValidator : IValidateOptions<BridgeOptions>
     {
         var failures = new List<string>();
 
+        // AddOptions().ValidateDataAnnotations() only inspects BridgeOptions' own
+        // properties, and every one of those is a nested options object carrying no
+        // attribute of its own. Without this, the [Range] and [Required] attributes
+        // throughout this file are decoration: MaxItemsPerSubscription accepts 100000,
+        // Port accepts 0, and the service starts and misbehaves.
+        ValidateAnnotations(options.Upstream, "Upstream", failures);
+        ValidateAnnotations(options.Acquisition, "Acquisition", failures);
+        ValidateAnnotations(options.Server, "Server", failures);
+        ValidateAnnotations(options.Snapshot, "Snapshot", failures);
+        ValidateAnnotations(options.Web, "Web", failures);
+
         ValidateUpstream(options.Upstream, failures);
         ValidateAcquisition(options.Acquisition, failures);
         ValidateServer(options.Server, failures);
@@ -24,6 +36,31 @@ public sealed class BridgeOptionsValidator : IValidateOptions<BridgeOptions>
         return failures.Count == 0
             ? ValidateOptionsResult.Success
             : ValidateOptionsResult.Fail(failures);
+    }
+
+    /// <summary>
+    /// Applies one options object's own DataAnnotations, naming the configuration key.
+    /// </summary>
+    /// <remarks>
+    /// The framework's message says "the field MaxItemsPerSubscription", which is not
+    /// something anybody can search an appsettings.json for. Prefixing the section turns it
+    /// into the key an operator actually has to edit.
+    /// </remarks>
+    private static void ValidateAnnotations(object section, string sectionName, List<string> failures)
+    {
+        var results = new List<ValidationResult>();
+
+        if (Validator.TryValidateObject(section, new ValidationContext(section), results, validateAllProperties: true))
+            return;
+
+        foreach (var result in results)
+        {
+            var keys = result.MemberNames.Any()
+                ? string.Join(", ", result.MemberNames.Select(m => $"Bridge:{sectionName}:{m}"))
+                : $"Bridge:{sectionName}";
+
+            failures.Add($"{keys} — {result.ErrorMessage}");
+        }
     }
 
     private static void ValidateUpstream(UpstreamOptions upstream, List<string> failures)
@@ -79,17 +116,10 @@ public sealed class BridgeOptionsValidator : IValidateOptions<BridgeOptions>
                 "follow the publishing interval.");
         }
 
-        if (acquisition.PublishingIntervalMs <= 0)
-        {
-            failures.Add(
-                $"Bridge:Acquisition:PublishingIntervalMs ({acquisition.PublishingIntervalMs}) must be positive.");
-        }
-
-        if (acquisition.Mode == AcquisitionMode.Polling && acquisition.PollingIntervalMs <= 0)
-        {
-            failures.Add(
-                $"Bridge:Acquisition:PollingIntervalMs ({acquisition.PollingIntervalMs}) must be positive.");
-        }
+        // The publishing and polling intervals are bounded by their [Range] attributes,
+        // which ValidateAnnotations now applies. Zero is the only value this has to catch
+        // itself, because -1 is meaningful for the sampling interval so the attribute has
+        // to admit it.
 
         ValidateDeadband(acquisition, failures);
     }
