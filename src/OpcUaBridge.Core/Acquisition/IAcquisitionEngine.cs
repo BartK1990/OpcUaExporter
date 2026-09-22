@@ -9,6 +9,7 @@ public sealed class AcquisitionStatistics
     private long _valuesReceived;
     private long _cyclesCompleted;
     private long _cyclesSkipped;
+    private long _publishesReceived;
 
     // Written from the SDK's publish thread (one per subscription, concurrently) and from
     // polling cycles; read from the Blazor circuit. Kept as 64-bit primitives written with
@@ -20,8 +21,21 @@ public sealed class AcquisitionStatistics
     /// <summary>Values delivered since the service started.</summary>
     public long ValuesReceived => Interlocked.Read(ref _valuesReceived);
 
-    /// <summary>Publish responses or polling cycles completed.</summary>
+    /// <summary>Publish responses or polling cycles that carried at least one value.</summary>
     public long CyclesCompleted => Interlocked.Read(ref _cyclesCompleted);
+
+    /// <summary>
+    /// Every publish response the upstream server has sent, including empty ones.
+    /// </summary>
+    /// <remarks>
+    /// Counted separately from <see cref="CyclesCompleted"/> because the gap between them
+    /// is diagnostic. A server that answers a publish request the instant it arrives --
+    /// rather than holding it until the publishing interval elapses or data appears --
+    /// puts the SDK into a request/response loop that costs a great deal of CPU and
+    /// delivers nothing. That shows up here as thousands of publishes a second against a
+    /// value rate of almost none, and is invisible in every other number on the dashboard.
+    /// </remarks>
+    public long PublishesReceived => Interlocked.Read(ref _publishesReceived);
 
     /// <summary>
     /// Polling cycles skipped because the previous one was still running.
@@ -53,6 +67,9 @@ public sealed class AcquisitionStatistics
     }
 
     public void RecordSkippedCycle() => Interlocked.Increment(ref _cyclesSkipped);
+
+    /// <summary>Records a publish response, whether or not it carried anything.</summary>
+    public void RecordPublish() => Interlocked.Increment(ref _publishesReceived);
 }
 
 /// <summary>

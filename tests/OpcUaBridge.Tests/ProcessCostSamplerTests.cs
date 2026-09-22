@@ -87,6 +87,61 @@ public sealed class ProcessCostSamplerTests
         Assert.True(cost.Gen0Collections >= 0);
     }
 
+    [Fact]
+    public void Sample_ReportsAllocationAndWorkItemRatesOverTheWindow()
+    {
+        var time = Clock();
+        var sampler = new ProcessCostSampler(time);
+        sampler.Sample();
+
+        var noise = new List<byte[]>();
+        for (var i = 0; i < 2_000; i++)
+            noise.Add(new byte[1024]);
+
+        Assert.Equal(2_000, noise.Count);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        var cost = sampler.Sample();
+
+        // The rates are what separate a loop doing work nobody asked for from a gateway
+        // moving values, so they have to be a rate over the window, not a running total.
+        Assert.True(cost.AllocatedBytesPerSecond > 0);
+        Assert.True(cost.WorkItemsPerSecond >= 0);
+    }
+
+    [Fact]
+    public void Sample_FirstCall_ReportsNoRatesAtAll()
+    {
+        var cost = new ProcessCostSampler(Clock()).Sample();
+
+        Assert.Equal(0, cost.AllocatedBytesPerSecond);
+        Assert.Equal(0, cost.WorkItemsPerSecond);
+
+        // A thread first seen on this sample has no baseline, so counting its whole
+        // lifetime would read as a spin on a process that has been up for a week.
+        Assert.Equal(0, cost.BusiestThreadPercentOfCore);
+    }
+
+    [Fact]
+    public void Sample_BusiestThread_NeverExceedsTheWholeProcess()
+    {
+        var time = Clock();
+        var sampler = new ProcessCostSampler(time);
+        sampler.Sample();
+
+        var spin = 0L;
+        for (var i = 0; i < 20_000_000; i++)
+            spin += i;
+
+        Assert.True(spin > 0);
+
+        time.Advance(TimeSpan.FromSeconds(1));
+        var cost = sampler.Sample();
+
+        // One thread cannot have used more processor time than every thread together.
+        Assert.True(cost.BusiestThreadPercentOfCore <= cost.CpuPercentOfCore + 0.001);
+    }
+
     /// <summary>A clock that will move backwards, which <c>FakeTimeProvider</c> will not.</summary>
     private sealed class SteppingClock(DateTimeOffset now) : TimeProvider
     {

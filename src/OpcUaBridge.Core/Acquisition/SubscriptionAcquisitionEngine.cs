@@ -231,6 +231,12 @@ public sealed class SubscriptionAcquisitionEngine(
         };
 
         subscription.FastDataChangeCallback = OnDataChange;
+
+        // Counted so an empty-publish storm is visible. A server that returns a publish
+        // response immediately instead of holding it for the publishing interval turns
+        // the SDK's publish pipeline into a hot loop, and no other figure shows it.
+        subscription.FastKeepAliveCallback = OnKeepAlive;
+
         return subscription;
     }
 
@@ -265,6 +271,8 @@ public sealed class SubscriptionAcquisitionEngine(
     /// </remarks>
     private void OnDataChange(Subscription subscription, DataChangeNotification notification, IList<string> stringTable)
     {
+        Statistics.RecordPublish();
+
         try
         {
             var count = 0;
@@ -292,6 +300,10 @@ public sealed class SubscriptionAcquisitionEngine(
         }
     }
 
+    /// <summary>A publish that carried no data. Counted, and otherwise ignored.</summary>
+    private void OnKeepAlive(Subscription subscription, NotificationData notification)
+        => Statistics.RecordPublish();
+
     public async Task StopAsync(CancellationToken ct)
     {
         await _gate.WaitAsync(ct);
@@ -312,6 +324,7 @@ public sealed class SubscriptionAcquisitionEngine(
             try
             {
                 subscription.FastDataChangeCallback = null;
+                subscription.FastKeepAliveCallback = null;
 
                 if (subscription.Created && subscription.Session is { } session)
                     await session.RemoveSubscriptionAsync(subscription, ct);

@@ -65,6 +65,7 @@
         <dl>
             <dt>Values received</dt><dd>@(_statistics?.ValuesReceived ?? 0)</dd>
             <dt>Values per second</dt><dd>@_valuesPerSecond.ToString("N0")</dd>
+            <dt>Publishes per second</dt><dd class="@PublishRateClass">@_publishesPerSecond.ToString("N0")</dd>
             <dt>Cycles</dt><dd>@(_statistics?.CyclesCompleted ?? 0)</dd>
             @if (_statistics?.CyclesSkipped > 0)
             {
@@ -81,6 +82,18 @@
                 Cycles are being skipped because the previous one was still running. They are
                 never queued, so this means the polling interval is too tight for this tag
                 count — lengthen it, or switch to subscription mode.
+            </p>
+        }
+        @if (IsPublishStorm)
+        {
+            <p class="note warning">
+                The upstream server is answering far more publish requests than the
+                @(Options.Value.Acquisition.PublishingIntervalMs)ms publishing interval and the
+                @_subscriptionCount subscription(s) should produce, and almost none of them carry
+                data. It is replying the instant a request arrives instead of holding it, which
+                turns the SDK's publish pipeline into a hot loop. Raise
+                Bridge:Acquisition:MaxItemsPerSubscription so there are fewer subscriptions, and
+                check the server's own publishing settings.
             </p>
         }
     </section>
@@ -114,6 +127,9 @@
             <dt>Cores</dt><dd>@Environment.ProcessorCount</dd>
             <dt>Working set</dt><dd>@Megabytes(_cost.WorkingSetBytes)</dd>
             <dt>Managed heap</dt><dd>@Megabytes(_cost.ManagedHeapBytes)</dd>
+            <dt>Busiest thread</dt><dd class="@(_cost.BusiestThreadPercentOfCore > 80 ? "warning" : "")">@_cost.BusiestThreadPercentOfCore.ToString("F1")% of a core</dd>
+            <dt>Allocation</dt><dd>@Megabytes((long)_cost.AllocatedBytesPerSecond)/s</dd>
+            <dt>Work items</dt><dd>@_cost.WorkItemsPerSecond.ToString("N0")/s</dd>
             <dt>Threads</dt><dd>@_cost.ThreadCount</dd>
             <dt>Collections</dt><dd>gen0 @_cost.Gen0Collections / gen2 @_cost.Gen2Collections</dd>
         </dl>
@@ -136,14 +152,18 @@
 
     private long _lastValuesReceived;
     private double _valuesPerSecond;
+    private long _lastPublishesReceived;
+    private double _publishesPerSecond;
+    private int _subscriptionCount;
 
-    private static readonly ProcessCost EmptyCost = new(TimeSpan.Zero, 0, 0, 0, 0, 0, 0, 0);
+    private static readonly ProcessCost EmptyCost = new(TimeSpan.Zero, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 
     protected override async Task OnInitializedAsync()
     {
         _status = Upstream.Status;
         _snapshot = await SnapshotStore.LoadAsync();
         _lastValuesReceived = Acquisition.Engine?.Statistics.ValuesReceived ?? 0;
+        _lastPublishesReceived = Acquisition.Engine?.Statistics.PublishesReceived ?? 0;
 
         // Primes the sampler so the first displayed figure covers one tick rather than
         // the whole time since the process started, which would read as near zero.
@@ -168,10 +188,19 @@
                 _cost = Cost.Sample();
 
                 var received = _statistics?.ValuesReceived ?? 0;
-                _valuesPerSecond = _cost.Window > TimeSpan.Zero
-                    ? Math.Max(0, received - _lastValuesReceived) / _cost.Window.TotalSeconds
-                    : 0;
+                var published = _statistics?.PublishesReceived ?? 0;
+                _subscriptionCount = Math.Max(1,
+                    (Registry.Count + Options.Value.Acquisition.MaxItemsPerSubscription - 1)
+                        / Math.Max(1, Options.Value.Acquisition.MaxItemsPerSubscription));
+
+                if (_cost.Window > TimeSpan.Zero)
+                {
+                    _valuesPerSecond = Math.Max(0, received - _lastValuesReceived) / _cost.Window.TotalSeconds;
+                    _publishesPerSecond = Math.Max(0, published - _lastPublishesReceived) / _cost.Window.TotalSeconds;
+                }
+
                 _lastValuesReceived = received;
+                _lastPublishesReceived = published;
 
                 await InvokeAsync(StateHasChanged);
             }
@@ -185,6 +214,33 @@
     private void Reconnect() => Upstream.RequestReconnect();
 
     private static string Megabytes(long bytes) => $"{bytes / 1024d / 1024d:N0} MB";
+
+    /// <summary>
+    /// What the publishing interval and subscription count say the publish rate should be.
+    /// </summary>
+    /// <remarks>
+    /// Doubled, because a subscription legitimately publishes a little more often than its
+    /// interval while it is catching up, and this figure exists to catch a rate that is
+    /// wrong by orders of magnitude rather than to police jitter.
+    /// </remarks>
+    private double ExpectedPublishesPerSecond
+        => _subscriptionCount * (2000d / Math.Max(1, Options.Value.Acquisition.PublishingIntervalMs));
+
+    /// <summary>
+    /// Publishes arriving far faster than configured, and carrying nothing.
+    /// </summary>
+    /// <remarks>
+    /// Both halves are needed. A burst of publishes that carry data is the gateway working
+    /// -- the first seconds after a subscription is created look exactly like that, as
+    /// every tag reports its initial value. It is publishes *without* values behind them
+    /// that mean the server is answering requests the instant they arrive.
+    /// </remarks>
+    private bool IsPublishStorm
+        => Acquisition.Engine?.Mode == AcquisitionMode.Subscription
+           && _publishesPerSecond > Math.Max(20, ExpectedPublishesPerSecond)
+           && _valuesPerSecond < _publishesPerSecond;
+
+    private string PublishRateClass => IsPublishStorm ? "warning" : string.Empty;
 
     private string StateClass => _status.State switch
     {

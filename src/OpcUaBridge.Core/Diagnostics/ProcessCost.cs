@@ -12,6 +12,19 @@ namespace OpcUaBridge.Diagnostics;
 /// <param name="ThreadCount">OS threads in the process.</param>
 /// <param name="Gen0Collections">Gen-0 collections since the process started.</param>
 /// <param name="Gen2Collections">Gen-2 collections since the process started.</param>
+/// <param name="AllocatedBytesPerSecond">
+/// Managed allocation rate over the window. Read against the value rate: allocation
+/// without values behind it is a loop doing work nobody asked for.
+/// </param>
+/// <param name="WorkItemsPerSecond">
+/// Thread-pool work items completed over the window. A timer or continuation spinning
+/// shows up here as a rate orders of magnitude above anything the gateway should need.
+/// </param>
+/// <param name="BusiestThreadPercentOfCore">
+/// Processor time of the single hottest thread. Near 100 means one loop is spinning;
+/// spread thinly means the cost is real work fanned across the pool. Zero when the
+/// platform will not report per-thread times.
+/// </param>
 public sealed record ProcessCost(
     TimeSpan Window,
     double CpuPercentOfCore,
@@ -20,4 +33,7 @@ public sealed record ProcessCost(
     long ManagedHeapBytes,
     int ThreadCount,
     int Gen0Collections,
-    int Gen2Collections);
+    int Gen2Collections,
+    double AllocatedBytesPerSecond,
+    double WorkItemsPerSecond,
+    double BusiestThreadPercentOfCore);

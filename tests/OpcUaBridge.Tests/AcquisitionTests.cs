@@ -67,6 +67,35 @@ public class AcquisitionStatisticsTests
     }
 
     [Fact]
+    public void RecordPublish_CountsPublishesThatCarriedNothing()
+    {
+        var statistics = new AcquisitionStatistics();
+
+        statistics.RecordPublish();
+        statistics.RecordPublish();
+
+        // The gap between publishes and cycles is the diagnostic. A server answering a
+        // publish request the instant it arrives, instead of holding it until data
+        // appears, shows up here and in no other figure on the dashboard.
+        Assert.Equal(2, statistics.PublishesReceived);
+        Assert.Equal(0, statistics.CyclesCompleted);
+        Assert.Equal(0, statistics.ValuesReceived);
+    }
+
+    [Fact]
+    public void RecordCycle_DoesNotCountAsAPublish()
+    {
+        // A polling cycle has no publish behind it at all, so it must not inflate a rate
+        // whose whole purpose is to describe the subscription pipeline.
+        var statistics = new AcquisitionStatistics();
+
+        statistics.RecordCycle(7, TimeSpan.FromMilliseconds(12), DateTimeOffset.UnixEpoch);
+
+        Assert.Equal(0, statistics.PublishesReceived);
+        Assert.Equal(1, statistics.CyclesCompleted);
+    }
+
+    [Fact]
     public void RecordSkippedCycle_IsCountedSeparatelyFromCompletedOnes()
     {
         // An operator reads these two together to decide whether the polling interval is

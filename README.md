@@ -248,7 +248,7 @@ service, and not a substitute for keeping the dashboard off untrusted networks.
 
 | Page | |
 |---|---|
-| **Dashboard** | Upstream state, reconnect count, last error; downstream endpoint and what clients are monitoring; acquisition throughput; namespace age; this process's CPU, memory and GC |
+| **Dashboard** | Upstream state, reconnect count, last error; downstream endpoint and what clients are monitoring; acquisition throughput and publish rate; namespace age; this process's CPU, allocation, thread-pool and GC figures |
 | **Tags** | Every mirrored tag with its live value, status and source timestamp, filterable |
 | **Namespace** | Capture, diff, apply |
 | **Diagnostics** | Recent OPC UA client activity, and where the log files are |
@@ -259,6 +259,20 @@ of the whole machine (the number Task Manager shows) and of one core. Read it ne
 gateway doing its job, and cost with no rate to match it is not — in which case check
 whether the upstream link is up at all, because a connection that keeps failing and
 retrying looks busy without moving a single value.
+
+**Publishes per second** on the acquisition card counts every publish response from the
+upstream server, including the empty ones — which is what makes it diagnostic. It should
+be roughly the subscription count divided by the publishing interval. Thousands a second
+against a value rate of almost none means the server is answering each publish request the
+instant it arrives instead of holding it until data appears, which turns the SDK's publish
+pipeline into a hot loop that delivers nothing. The dashboard calls that out when it sees
+it. Fewer, larger subscriptions (`Bridge:Acquisition:MaxItemsPerSubscription`) is the first
+thing to try, since the loop runs once per subscription.
+
+**Busiest thread**, **Allocation** and **Work items** on the runtime card say what kind of
+cost it is. One thread at nearly a full core is a loop that is not yielding; the same total
+spread thinly is real work fanned across the thread pool. Allocation or work items far
+above what the value rate could justify point at a loop running for its own sake.
 
 **Downstream / Monitored tags** is the other number worth knowing. It counts the mirrored
 tags the applications behind the bridge actually subscribe to. Every other tag is still
