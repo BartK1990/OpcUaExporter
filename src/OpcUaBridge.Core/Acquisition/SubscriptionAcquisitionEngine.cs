@@ -174,6 +174,41 @@ public sealed class SubscriptionAcquisitionEngine(
         logger.LogInformation(
             "Subscribed to {ItemCount} tag(s) across {SubscriptionCount} subscription(s).",
             _tagIndexByClientHandle.Count, _subscriptions.Count);
+
+        LogRevisedIntervals(acquisition);
+    }
+
+    /// <summary>
+    /// Reports what the server agreed to, which is not always what was asked for.
+    /// </summary>
+    /// <remarks>
+    /// A server revises both intervals to whatever it can actually do -- many have a fixed
+    /// scan rate and simply say so -- and a sampling interval of -1 has no meaning until it
+    /// does. Without this the negotiation is invisible, and "I set 250ms and it still
+    /// updates once a second" has no answer short of a packet capture.
+    /// </remarks>
+    private void LogRevisedIntervals(AcquisitionOptions acquisition)
+    {
+        var first = _subscriptions.FirstOrDefault();
+        if (first is null)
+            return;
+
+        var sampling = first.MonitoredItems
+            .Select(i => i.Status?.SamplingInterval)
+            .FirstOrDefault(s => s is not null);
+
+        var requestedSampling = acquisition.SamplingIntervalMs < 0
+            ? "the publishing interval (-1)"
+            : $"{acquisition.SamplingIntervalMs}ms";
+
+        logger.LogInformation(
+            "Upstream revised the publishing interval to {PublishingIntervalMs}ms (asked for " +
+            "{RequestedPublishingMs}ms) and the sampling interval to {SamplingIntervalMs} (asked for " +
+            "{RequestedSampling}).",
+            first.CurrentPublishingInterval,
+            acquisition.PublishingIntervalMs,
+            sampling is { } value ? $"{value}ms" : "an unreported value",
+            requestedSampling);
     }
 
     /// <summary>

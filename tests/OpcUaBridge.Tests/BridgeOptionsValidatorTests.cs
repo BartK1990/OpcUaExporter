@@ -96,6 +96,29 @@ public class BridgeOptionsValidatorTests
     }
 
     [Fact]
+    public void Defaults_FollowThePublishingIntervalRatherThanOversampling()
+    {
+        // QueueSize is 1, so a sampling interval faster than the publishing interval means
+        // the upstream server takes several samples per cycle and discards all but the
+        // newest. -1 is the OPC UA value for "use the publishing interval", and it keeps
+        // the two in step if the publishing interval is raised later.
+        var defaults = Valid().Acquisition;
+
+        Assert.Equal(-1, defaults.SamplingIntervalMs);
+        Assert.Equal(1, defaults.QueueSize);
+    }
+
+    [Fact]
+    public void Defaults_SplitALargeNamespaceIntoAHandfulOfSubscriptions()
+    {
+        // One publish pipeline runs per subscription. 64000 tags at the old default of
+        // 1000 meant 65 of them.
+        var defaults = Valid().Acquisition;
+
+        Assert.Equal(10_000, defaults.MaxItemsPerSubscription);
+    }
+
+    [Fact]
     public void Validate_RejectsASamplingIntervalOfZero()
     {
         // Legal OPC UA, and it means "as fast as this server can manage". Typed by hand it

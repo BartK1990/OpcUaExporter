@@ -132,18 +132,54 @@ public sealed class AcquisitionOptions
     public AcquisitionMode Mode { get; set; } = AcquisitionMode.Subscription;
 
     /// <summary>
-    /// Monitored items per subscription. Several medium subscriptions beat one huge one:
-    /// the SDK can keep multiple publish requests in flight, and one bad node fails only
-    /// its own subscription's create call.
+    /// Monitored items per subscription, so this divides the tag count into that many
+    /// subscriptions.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The SDK keeps a publish request outstanding per subscription, so this is really a
+    /// choice about how many publish pipelines to run. A large namespace split a thousand
+    /// at a time means dozens of them: 64 000 tags at 1000 is 65 subscriptions, at 10 000
+    /// it is 7. Measured at 64 314 tags and 740 values/s, that difference took publishes
+    /// from 7/s to 1/s and thread-pool work items from 146/s to 62/s.
+    /// </para>
+    /// <para>
+    /// Not unlimited, and the cap is enforced. One subscription holding everything
+    /// serialises publish handling behind a single pipeline, and loses the whole address
+    /// space at once if the server drops it.
+    /// </para>
+    /// </remarks>
     [Range(1, 50_000)]
-    public int MaxItemsPerSubscription { get; set; } = 1_000;
+    public int MaxItemsPerSubscription { get; set; } = 10_000;
 
     [Range(50, 3_600_000)]
     public int PublishingIntervalMs { get; set; } = 1_000;
 
+    /// <summary>
+    /// How often the upstream server samples each tag, or <c>-1</c> to follow the
+    /// publishing interval.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <c>-1</c> is the OPC UA value for "use the subscription's publishing interval", and
+    /// it is the right default here because <see cref="QueueSize"/> is one. Sampling
+    /// faster than the server publishes means it takes several samples per cycle and
+    /// discards all but the newest, so the extra work buys the bridge nothing and the
+    /// downstream application sees the same values either way.
+    /// </para>
+    /// <para>
+    /// It also keeps the two in step: raise the publishing interval later and the sampling
+    /// rate follows, instead of quietly leaving the plant server over-sampling.
+    /// </para>
+    /// <para>
+    /// Set an explicit interval when the upstream server needs one. The server may revise
+    /// whatever is asked for -- many have their own scan rate and simply report what they
+    /// will actually do -- and the revised figure is logged when the subscription is
+    /// created.
+    /// </para>
+    /// </remarks>
     [Range(-1, 3_600_000)]
-    public int SamplingIntervalMs { get; set; } = 1_000;
+    public int SamplingIntervalMs { get; set; } = -1;
 
     /// <summary>
     /// Server-side queue depth per monitored item. One is right for a gateway: it mirrors

@@ -324,18 +324,26 @@ So when the bridge costs more CPU than you want, reduce the **rate**, in this or
    reported, so the plant server, the network, this process and the application behind it
    all stop paying for it. On analogue tags a small deadband commonly removes most of the
    traffic. It triggers on status as well as value, so a tag going bad still reaches you.
-2. **`Bridge:Acquisition:SamplingIntervalMs`** — how often the upstream server looks. The
-   default of 1000 ms is already conservative; check it has not been lowered.
+2. **`Bridge:Acquisition:SamplingIntervalMs`** — how often the upstream server samples each
+   tag. The default is **-1**, the OPC UA value for "follow the subscription's publishing
+   interval", which is right because `QueueSize` is 1: sampling faster than the server
+   publishes means it takes several samples per cycle and throws all but the newest away,
+   so the extra work on the plant server buys nothing. Lowering it below the publishing
+   interval only loads the plant server; to get values sooner, lower
+   `PublishingIntervalMs` — the sampling rate follows it. The server may revise whatever is
+   asked for, and the log records what it actually agreed to when the subscription is
+   created.
 3. **Capture a smaller namespace.** Tags the downstream application will never read cost
    an acquisition and a mirror update each time they change.
 4. **`Bridge:Acquisition:MaxItemsPerSubscription`** — this divides the tag count into that
-   many subscriptions, and the SDK keeps a publish request outstanding for each one. At
-   64 000 tags the default of 1000 means 65 publish pipelines; 10 000 means 7. Measured at
-   64 314 tags and 740 values/s, going from 65 subscriptions to 7 took publishes from 7/s
-   to 1/s and thread-pool work items from 146/s to 62/s. The maximum is **50 000** — the
-   service refuses to start above it, because one subscription holding everything
-   serialises publish handling behind a single pipeline and loses the whole address space
-   at once if the server drops it. 10 000 is a good default for a large namespace.
+   many subscriptions, and the SDK keeps a publish request outstanding for each one, so it
+   is really a choice about how many publish pipelines to run. The default is **10 000**,
+   which puts 64 000 tags in 7 subscriptions. Measured at 64 314 tags and 740 values/s,
+   going from 65 subscriptions (1000 per subscription) to 7 took publishes from 7/s to 1/s
+   and thread-pool work items from 146/s to 62/s. The maximum is **50 000** — the service
+   refuses to start above it, because one subscription holding everything serialises
+   publish handling behind a single pipeline and loses the whole address space at once if
+   the server drops it.
 
 Two cautions on the deadband. It is a deliberate decision to stop mirroring the upstream
 server exactly — the mirror then holds the last value *outside* the band, not the last
