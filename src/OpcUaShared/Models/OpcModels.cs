@@ -87,13 +87,6 @@ public class ConnectionProfile
     public int ParallelBrowseMaxDegree { get; set; } = 10;
 }
 
-/// <summary>Export options.</summary>
-public class ExportOptions
-{
-    public string OutputPath  { get; set; } = string.Empty;
-    public ExportFormat Format { get; set; } = ExportFormat.Csv;
-}
-
 public class PendingCertificateInfo
 {
     public string Thumbprint { get; set; } = string.Empty;
@@ -139,5 +132,3 @@ public enum AuthenticationType
     Anonymous,
     UsernamePassword
 }
-
-public enum ExportFormat { Csv, Json, Xlsx }

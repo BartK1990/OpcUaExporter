@@ -1,0 +1,17 @@
+@inherits LayoutComponentBase
+
+<div class="page">
+    <nav class="sidebar">
+        <div class="brand">
+            <span class="brand-mark">UA</span>
+            <span class="brand-name">OPC UA Bridge</span>
+        </div>
+        <NavLink class="nav-item" href="" Match="NavLinkMatch.All">Dashboard</NavLink>
+        <NavLink class="nav-item" href="tags">Tags</NavLink>
+        <NavLink class="nav-item" href="namespace">Namespace</NavLink>
+        <NavLink class="nav-item" href="diagnostics">Diagnostics</NavLink>
+    </nav>
+    <main>
+        @Body
+    </main>
+</div>

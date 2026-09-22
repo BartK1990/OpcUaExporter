@@ -1,0 +1,207 @@
+@page "/namespace"
+@using Opc.Ua.Client
+@inject INamespaceSnapshotStore SnapshotStore
+@inject NamespaceCaptureService Capture
+@inject IUpstreamConnection Upstream
+@inject ILogger<Namespace> Logger
+
+<PageTitle>Namespace — OPC UA Bridge</PageTitle>
+
+<h1>Namespace</h1>
+
+<p class="note">
+    The captured address space is what the mirrored endpoint serves. It is never rewritten
+    while the bridge runs — only by the explicit command below — so the tags your
+    application sees cannot change underneath it because somebody reconfigured the upstream
+    server.
+</p>
+
+<section class="card">
+    <h2>Current snapshot</h2>
+    @if (_snapshot is null)
+    {
+        <p class="headline">Not captured</p>
+        <p>The mirrored endpoint is running but has no tags to serve.</p>
+    }
+    else
+    {
+        <dl>
+            <dt>Captured</dt><dd>@_snapshot.CapturedUtc.ToString("u")</dd>
+            <dt>From</dt><dd>@_snapshot.Source.EndpointUrl (@_snapshot.Source.ServerName)</dd>
+            <dt>Objects</dt><dd>@_snapshot.Stats.ObjectCount</dd>
+            <dt>Variables</dt><dd>@_snapshot.Stats.VariableCount</dd>
+            <dt>SHA-256</dt><dd class="path">@_hash</dd>
+        </dl>
+    }
+    <p class="path">@SnapshotStore.SnapshotPath</p>
+</section>
+
+<section class="card">
+    <h2>Capture from the upstream server</h2>
+
+    @if (Upstream.State is not UpstreamConnectionState.Connected)
+    {
+        <p class="note warning">
+            Capturing needs a live upstream connection. The bridge is currently
+            @Upstream.State.ToString().ToLowerInvariant().
+        </p>
+    }
+    else if (_candidate is null)
+    {
+        <p>
+            Browses the upstream address space and shows what would change. Nothing is
+            written until you apply it.
+        </p>
+        <button class="button" @onclick="BrowseAsync" disabled="@_busy">
+            @(_busy ? $"Browsing… {_variablesFound} variables" : "Browse and compare")
+        </button>
+    }
+    else
+    {
+        <p class="headline">
+            @_candidate.Stats.VariableCount variables, @_candidate.Stats.ObjectCount objects
+        </p>
+
+        @if (_diff is null || _diff.IsEmpty)
+        {
+            <p class="note good">Identical to the saved snapshot. There is nothing to apply.</p>
+        }
+        else
+        {
+            <dl>
+                <dt>Added</dt><dd>@_diff.Added.Count</dd>
+                <dt>Removed</dt><dd class="@(_diff.Removed.Count > 0 ? "warning" : "")">@_diff.Removed.Count</dd>
+                <dt>Changed</dt><dd>@_diff.Changed.Count</dd>
+            </dl>
+
+            @if (_diff.Removed.Count > 0)
+            {
+                <p class="note warning">
+                    Applying this removes @_diff.Removed.Count tag(s) from the mirrored endpoint.
+                    Any downstream client still reading them will get BadNodeIdUnknown.
+                </p>
+            }
+
+            <details>
+                <summary>What changed</summary>
+                <pre class="log">@DescribeDiff()</pre>
+            </details>
+        }
+
+        <div class="toolbar">
+            <button class="button primary" @onclick="ApplyAsync" disabled="@_busy">Apply</button>
+            <button class="button" @onclick="Discard" disabled="@_busy">Discard</button>
+        </div>
+    }
+
+    @if (_message is { } message)
+    {
+        <p class="note @_messageClass">@message</p>
+    }
+</section>
+
+@code {
+    private NamespaceSnapshot? _snapshot;
+    private NamespaceSnapshot? _candidate;
+    private SnapshotDiff? _diff;
+    private string? _hash;
+    private string? _message;
+    private string _messageClass = string.Empty;
+    private bool _busy;
+    private int _variablesFound;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        _snapshot = await SnapshotStore.LoadAsync();
+        _hash = await SnapshotStore.ComputeHashAsync();
+    }
+
+    private async Task BrowseAsync()
+    {
+        _busy = true;
+        _message = null;
+        _variablesFound = 0;
+
+        try
+        {
+            var session = (Session)Upstream.RequireSession();
+
+            _candidate = await Capture.CaptureAsync(session, onVariableCountChanged: count =>
+            {
+                _variablesFound = count;
+                _ = InvokeAsync(StateHasChanged);
+            });
+
+            _diff = await Capture.DiffAsync(_candidate);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Browsing the upstream address space failed.");
+            _message = $"Browse failed: {ex.Message}";
+            _messageClass = "bad";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task ApplyAsync()
+    {
+        if (_candidate is null)
+            return;
+
+        _busy = true;
+
+        try
+        {
+            var backup = await Capture.ApplyAsync(_candidate);
+
+            _message = backup is null
+                ? "Snapshot saved. Restart OPC UA Bridge to serve it."
+                : $"Snapshot saved; the previous one was backed up to {Path.GetFileName(backup)}. " +
+                  "Restart OPC UA Bridge to serve it.";
+            _messageClass = "good";
+
+            _candidate = null;
+            _diff = null;
+            await ReloadAsync();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Saving the namespace snapshot failed.");
+            _message = $"Could not save the snapshot: {ex.Message}";
+            _messageClass = "bad";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Discard()
+    {
+        _candidate = null;
+        _diff = null;
+        _message = null;
+    }
+
+    private string DescribeDiff()
+    {
+        if (_diff is null)
+            return string.Empty;
+
+        var lines = new List<string>();
+        lines.AddRange(_diff.Added.Take(50).Select(a => $"+ {a}"));
+        lines.AddRange(_diff.Removed.Take(50).Select(r => $"- {r}"));
+        lines.AddRange(_diff.Changed.Take(50).Select(c => $"~ {c}"));
+
+        var total = _diff.Added.Count + _diff.Removed.Count + _diff.Changed.Count;
+        if (total > lines.Count)
+            lines.Add($"… and {total - lines.Count} more");
+
+        return string.Join(Environment.NewLine, lines);
+    }
+}
