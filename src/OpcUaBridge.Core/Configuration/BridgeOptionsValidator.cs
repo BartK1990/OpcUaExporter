@@ -90,6 +90,35 @@ public sealed class BridgeOptionsValidator : IValidateOptions<BridgeOptions>
             failures.Add(
                 $"Bridge:Acquisition:PollingIntervalMs ({acquisition.PollingIntervalMs}) must be positive.");
         }
+
+        ValidateDeadband(acquisition, failures);
+    }
+
+    private static void ValidateDeadband(AcquisitionOptions acquisition, List<string> failures)
+    {
+        if (acquisition.Deadband == AcquisitionDeadband.None)
+            return;
+
+        // A deadband of zero is the same as no deadband, but it reads like one is in
+        // force. Somebody who set the type and left the value at its default would
+        // otherwise spend a while wondering why nothing changed.
+        if (acquisition.DeadbandValue <= 0)
+        {
+            failures.Add(
+                $"Bridge:Acquisition:Deadband is {acquisition.Deadband}, so Bridge:Acquisition:DeadbandValue must be " +
+                "greater than zero. Set a magnitude, or set Deadband to None.");
+        }
+
+        if (acquisition.Deadband == AcquisitionDeadband.Percent && acquisition.DeadbandValue > 100)
+        {
+            failures.Add(
+                $"Bridge:Acquisition:DeadbandValue ({acquisition.DeadbandValue}) is a percentage of each tag's " +
+                "engineering-unit range, so it cannot exceed 100.");
+        }
+
+        // A deadband in polling mode is inert rather than harmful, so it is warned about
+        // where the mode is acted on rather than refused here. A gateway whose job is to
+        // be available should not decline to start over a setting that does nothing.
     }
 
     private static void ValidateServer(MirrorServerOptions server, List<string> failures)

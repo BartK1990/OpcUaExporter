@@ -99,6 +99,33 @@ public enum AcquisitionMode
     Polling
 }
 
+/// <summary>How much a value must move before the upstream server bothers reporting it.</summary>
+/// <remarks>
+/// A gateway's cost is very nearly proportional to the values flowing through it, and on a
+/// plant server most of those values are an analogue input jittering in its last digit.
+/// A deadband drops them at the source, so the upstream server, the network, this process
+/// and the application behind it all stop paying for them.
+/// </remarks>
+public enum AcquisitionDeadband
+{
+    /// <summary>Report every change. The default, and the only setting that mirrors the upstream server exactly.</summary>
+    None,
+
+    /// <summary>Report only when the value moves by more than <c>DeadbandValue</c>, in the tag's own units.</summary>
+    Absolute,
+
+    /// <summary>
+    /// Report only when the value moves by more than <c>DeadbandValue</c> percent of the
+    /// tag's engineering-unit range.
+    /// </summary>
+    /// <remarks>
+    /// Requires the upstream node to publish an <c>EURange</c> property. A server rejects
+    /// the filter on any node that does not, and those tags are reported as rejected
+    /// monitored items at startup rather than silently going quiet.
+    /// </remarks>
+    Percent
+}
+
 /// <summary>How the bridge gets values out of the upstream server.</summary>
 public sealed class AcquisitionOptions
 {
@@ -125,6 +152,22 @@ public sealed class AcquisitionOptions
     /// </summary>
     [Range(1, 1_000)]
     public int QueueSize { get; set; } = 1;
+
+    /// <summary>
+    /// Whether the upstream server filters out changes too small to care about.
+    /// </summary>
+    /// <remarks>
+    /// Off by default, because a bridge's job is to mirror what the upstream server says
+    /// and a deadband is a deliberate decision to stop doing that exactly. It is the
+    /// largest single lever on this process's CPU when one is needed: cost tracks the
+    /// value rate, and on analogue tags a small deadband commonly removes most of it.
+    /// Subscription mode only -- polling reads every tag by definition.
+    /// </remarks>
+    public AcquisitionDeadband Deadband { get; set; } = AcquisitionDeadband.None;
+
+    /// <summary>The deadband's magnitude: engineering units for Absolute, percent of range for Percent.</summary>
+    [Range(0, 1_000_000_000)]
+    public double DeadbandValue { get; set; }
 
     /// <summary>How often a polling cycle starts. Cycles never queue; a late one is skipped.</summary>
     [Range(50, 3_600_000)]

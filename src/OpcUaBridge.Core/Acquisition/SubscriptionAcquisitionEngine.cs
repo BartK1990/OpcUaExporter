@@ -103,6 +103,16 @@ public sealed class SubscriptionAcquisitionEngine(
             "Creating {ChunkCount} subscription(s) for {TagCount} tag(s) at a {PublishingIntervalMs}ms publishing interval.",
             chunkCount, resolved.Count, acquisition.PublishingIntervalMs);
 
+        var filter = BuildDataChangeFilter(acquisition);
+
+        if (filter is not null)
+        {
+            logger.LogInformation(
+                "Upstream changes smaller than a {DeadbandType} deadband of {DeadbandValue} will not be reported. " +
+                "The mirror therefore holds the last value outside that band, not the last value the server saw.",
+                acquisition.Deadband, acquisition.DeadbandValue);
+        }
+
         for (var offset = 0; offset < resolved.Count; offset += chunkSize)
         {
             ct.ThrowIfCancellationRequested();
@@ -122,6 +132,8 @@ public sealed class SubscriptionAcquisitionEngine(
                     QueueSize = (uint)acquisition.QueueSize,
                     DiscardOldest = true,
                     MonitoringMode = MonitoringMode.Reporting,
+                    // Shared between items: the SDK encodes it per item and never mutates it.
+                    Filter = filter,
                     Handle = tag
                 });
             }
@@ -146,11 +158,53 @@ public sealed class SubscriptionAcquisitionEngine(
                 "{FailedCount} monitored item(s) were rejected by the server and {UnresolvedCount} tag(s) " +
                 "could not be resolved. Those tags will report a bad status until the namespace is captured again.",
                 failed, unresolved);
+
+            if (filter is not null)
+            {
+                // A percent deadband is only defined for a node that publishes an EURange,
+                // which discrete and string tags do not. Naming it here saves working back
+                // from a BadFilterNotAllowed on a tag that was fine yesterday.
+                logger.LogWarning(
+                    "A deadband is configured, and a server rejects one on any tag it does not apply to -- " +
+                    "a percent deadband needs the tag to publish an EURange. Set Bridge:Acquisition:Deadband " +
+                    "to None if those tags matter more than the saving.");
+            }
         }
 
         logger.LogInformation(
             "Subscribed to {ItemCount} tag(s) across {SubscriptionCount} subscription(s).",
             _tagIndexByClientHandle.Count, _subscriptions.Count);
+    }
+
+    /// <summary>
+    /// The server-side filter, or null to report every change.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Filtering at the server is worth far more than filtering here would be: a value
+    /// that is never reported costs the upstream server no notification, the network no
+    /// bytes, this process no publish handling, and the mirror no node update. At a few
+    /// tens of thousands of values a second, that is the difference the CPU shows.
+    /// </para>
+    /// <para>
+    /// <see cref="DataChangeTrigger.StatusValue"/> rather than value alone, because a tag
+    /// going bad must reach the downstream application even when its number has not moved.
+    /// A gateway that swallowed that would be worse than useless.
+    /// </para>
+    /// </remarks>
+    internal static DataChangeFilter? BuildDataChangeFilter(AcquisitionOptions acquisition)
+    {
+        if (acquisition.Deadband == AcquisitionDeadband.None || acquisition.DeadbandValue <= 0)
+            return null;
+
+        return new DataChangeFilter
+        {
+            Trigger = DataChangeTrigger.StatusValue,
+            DeadbandType = (uint)(acquisition.Deadband == AcquisitionDeadband.Percent
+                ? Opc.Ua.DeadbandType.Percent
+                : Opc.Ua.DeadbandType.Absolute),
+            DeadbandValue = acquisition.DeadbandValue
+        };
     }
 
     private Subscription BuildSubscription(ISession session, AcquisitionOptions acquisition, int ordinal)

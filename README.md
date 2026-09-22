@@ -265,6 +265,47 @@ tags the applications behind the bridge actually subscribe to. Every other tag i
 acquired upstream, which is deliberate: it is what keeps a value ready the moment
 something asks for one, including during an outage.
 
+### Performance and tuning
+
+The gateway's CPU tracks the rate of values flowing through it and almost nothing else.
+Measured against a stand-in plant server (Linux, Release build), as a percentage of **one
+core**:
+
+| | CPU |
+|---|---|
+| 5 000 tags mirrored, upstream down, nothing connected | 0.9% |
+| 5 000 tags, 5 000 values/s from upstream, no downstream client | 1.4% |
+| 5 000 tags, 20 000 values/s from upstream (250 ms sampling) | 2.5% |
+| …plus a client monitoring all 5 000 (14 300 values/s through) | 7.9% |
+| …the same with SignAndEncrypt / Basic256Sha256 downstream | 8.5% |
+| 50 000 tags, ~43 000 values/s, no downstream client | 6.5% |
+| 50 000 tags, ~43 000 values/s, client monitoring 2 000 of them | 6.9% |
+| 50 000 tags, ~43 000 values/s, client monitoring all 50 000 | 31.5% |
+
+Two things follow. Serving values downstream costs roughly **four times** what acquiring
+them does, per value — so acquiring tags nobody downstream has asked for is comparatively
+cheap, and it is what keeps a value ready the moment something does ask. And encryption,
+polling versus subscription, and an open dashboard are all noise next to the rate itself.
+
+So when the bridge costs more CPU than you want, reduce the **rate**, in this order:
+
+1. **`Bridge:Acquisition:Deadband`** — the largest lever, and off by default. `Absolute`
+   with a magnitude in the tag's own units, or `Percent` of its engineering-unit range,
+   makes the *upstream server* drop changes too small to care about. The value is never
+   reported, so the plant server, the network, this process and the application behind it
+   all stop paying for it. On analogue tags a small deadband commonly removes most of the
+   traffic. It triggers on status as well as value, so a tag going bad still reaches you.
+2. **`Bridge:Acquisition:SamplingIntervalMs`** — how often the upstream server looks. The
+   default of 1000 ms is already conservative; check it has not been lowered.
+3. **Capture a smaller namespace.** Tags the downstream application will never read cost
+   an acquisition and a mirror update each time they change.
+
+Two cautions on the deadband. It is a deliberate decision to stop mirroring the upstream
+server exactly — the mirror then holds the last value *outside* the band, not the last
+value the server saw. And `Percent` requires each tag to publish an `EURange`; a server
+rejects the filter on any tag that does not, which the log reports at startup as rejected
+monitored items rather than letting those tags quietly go silent.
+
 ### Command line
 
 ```

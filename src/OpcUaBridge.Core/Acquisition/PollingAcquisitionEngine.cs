@@ -113,6 +113,16 @@ public sealed class PollingAcquisitionEngine(
             "(server limit {ServerLimit}).",
             nodeIds.Count, acquisition.PollingIntervalMs, chunks.Count, chunkSize, serverLimit);
 
+        if (acquisition.Deadband != AcquisitionDeadband.None)
+        {
+            // Inert rather than harmful, so it does not stop the service -- but an operator
+            // who set it to spare the plant server should know it is not being spared.
+            logger.LogWarning(
+                "Bridge:Acquisition:Deadband is {Deadband}, which only applies in Subscription mode. " +
+                "Polling reads every tag on every cycle, so no value is being filtered.",
+                acquisition.Deadband);
+        }
+
         using var timer = new PeriodicTimer(interval, _time);
 
         while (await SafeWaitAsync(timer, ct))
