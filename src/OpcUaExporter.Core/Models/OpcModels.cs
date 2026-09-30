@@ -12,12 +12,44 @@ public class OpcTag
     public string? Quality    { get; set; }
     public bool   IsSelected  { get; set; }
 
-    /// <summary>Whether this tag is included in the live subscription. Off by default until checked or "Subscribe All" is used.</summary>
-    public bool   IsSubscribeEnabled { get; set; }
     public List<OpcTag> Children { get; set; } = [];
+
+    /// <summary>
+    /// Whether <see cref="Children"/> holds this node's real child list. Nodes appear in the tree before
+    /// their children are browsed (the background deep scan fills the tree progressively), so an
+    /// unloaded node may still have children the user can fetch on demand.
+    /// </summary>
+    public bool ChildrenLoaded { get; set; }
+
+    /// <summary>True while an on-demand request for this node's children is in flight.</summary>
+    public bool IsLoadingChildren { get; set; }
 
     /// <summary>Whether this node can be checked/selected (only Variable nodes carry a value to export).</summary>
     public bool IsSelectable => NodeClass == "Variable";
+
+    /// <summary>Whether expanding this node should first ask the server for its children.</summary>
+    public bool CanLoadChildren => !ChildrenLoaded && NodeClass is "Object" or "Variable";
+
+    private readonly object _childrenSync = new();
+
+    /// <summary>
+    /// Publishes <paramref name="children"/> as this node's child list unless another browser (the background
+    /// deep scan or an on-demand expand) already did, and returns whichever list won. Keeps both browsers
+    /// working on the same <see cref="OpcTag"/> instances, so selections made on early-loaded nodes survive.
+    /// The list is swapped in whole, never mutated afterwards, so the UI can render it while browsing continues.
+    /// </summary>
+    public List<OpcTag> PublishChildren(List<OpcTag> children)
+    {
+        lock (_childrenSync)
+        {
+            if (ChildrenLoaded)
+                return Children;
+
+            Children = children;
+            ChildrenLoaded = true;
+            return children;
+        }
+    }
 
     /// <summary>Flattens this node and all descendant Variable nodes.</summary>
     public IEnumerable<OpcTag> Flatten()
