@@ -996,9 +996,11 @@ public class OpcUaService
         Notify();
     }
 
+    /// <summary>Selects/deselects every selectable tag under <paramref name="folderTag"/>, including the tag itself
+    /// when it is a Variable (structured variables carry child tags too).</summary>
     public void SelectInFolder(OpcTag folderTag, bool select)
     {
-        foreach (var tag in FlattenAll(folderTag.Children).Where(t => t.IsSelectable))
+        foreach (var tag in ResolveInTree(FlattenAll([folderTag])).Where(t => t.IsSelectable))
             tag.IsSelected = select;
 
         Notify();
@@ -1006,8 +1008,35 @@ public class OpcUaService
 
     public void ToggleTag(OpcTag tag)
     {
-        tag.IsSelected = !tag.IsSelected;
+        var target = ResolveInTree([tag])[0];
+        target.IsSelected = !target.IsSelected;
         Notify();
+    }
+
+    /// <summary>
+    /// Maps tags back to their instances in <see cref="TagTree"/>. The tag browser's filtered view shallow-clones
+    /// ancestors that don't match the filter themselves, so a clicked node may be a copy; mutating the copy would
+    /// be lost on the next render. Tags that are already in the tree (or unknown to it) are returned unchanged.
+    /// </summary>
+    private List<OpcTag> ResolveInTree(IEnumerable<OpcTag> tags)
+    {
+        var all = FlattenAll(TagTree).ToList();
+        var inTree = new HashSet<OpcTag>(all, ReferenceEqualityComparer.Instance);
+        Dictionary<string, OpcTag>? byNodeId = null;
+
+        var result = new List<OpcTag>();
+        foreach (var tag in tags)
+        {
+            if (inTree.Contains(tag))
+            {
+                result.Add(tag);
+                continue;
+            }
+
+            byNodeId ??= all.GroupBy(t => t.NodeId).ToDictionary(g => g.Key, g => g.First());
+            result.Add(byNodeId.TryGetValue(tag.NodeId, out var original) ? original : tag);
+        }
+        return result;
     }
 
     public List<string> GetSelectedNodeIds()

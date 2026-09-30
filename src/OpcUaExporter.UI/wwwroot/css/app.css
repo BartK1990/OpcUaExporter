@@ -377,6 +377,8 @@ body.pane-resizing * {
 
 .selected-actions { margin-bottom: 10px; }
 
+.selected-search-row { flex-wrap: nowrap; }
+
 /* ── Recording indicator ────────────────────────────────── */
 .recording-indicator {
     display: flex;
@@ -817,6 +819,7 @@ body.row-resizing * {
 }
 
 .chevron.expanded { transform: rotate(90deg); }
+.chevron:hover { color: var(--text-primary); }
 .chevron-spacer { width: 14px; display: inline-block; }
 
 .tag-check {

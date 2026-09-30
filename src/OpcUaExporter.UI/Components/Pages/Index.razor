@@ -240,17 +240,40 @@
                                 <span class="recording-path">Recording (@Opc.RecordedRowCount rows) → @Opc.RecordingFilePath</span>
                             </div>
                         }
+
+                        <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@(Opc.IsBusy || !Opc.IsSubscribed)">
+                            ⏹ Stop Subscription
+                        </button>
                     </div>
 
-                    <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@(Opc.IsBusy || !Opc.IsSubscribed)">
-                        ⏹ Stop Subscription
-                    </button>
+                    @if (SelectedCount > 0)
+                    {
+                        <div class="tag-search-row selected-search-row">
+                            <div class="tag-search-wrap">
+                                <i class="bi bi-search tag-search-icon"></i>
+                                <input class="field-input tag-search-input" placeholder="Filter selected by name or node ID…"
+                                       @bind="_selectedFilter" @bind:event="oninput" />
+                            </div>
+                            @if (IsSelectedFilterActive)
+                            {
+                                <button class="btn btn-ghost icon-btn" title="Clear filter" @onclick="ClearSelectedFilter"><i class="bi bi-x-lg"></i></button>
+                                <span class="badge">@SelectedTags.Count of @SelectedCount</span>
+                            }
+                        </div>
+                    }
 
                     @if (SelectedCount == 0)
                     {
                         <div class="empty-state">
                             <div class="empty-icon">☐</div>
                             <p>Check tags on the left to add them here.</p>
+                        </div>
+                    }
+                    else if (IsSelectedFilterActive && SelectedTags.Count == 0)
+                    {
+                        <div class="empty-state">
+                            <div class="empty-icon"><i class="bi bi-search"></i></div>
+                            <p>No selected tags match your filter.</p>
                         </div>
                     }
                     else
@@ -568,6 +591,10 @@
 
     private string _tagFilter = string.Empty;
     private bool _selectedOnly;
+    private string _selectedFilter = string.Empty;
+
+    private bool IsSelectedFilterActive => !string.IsNullOrWhiteSpace(_selectedFilter);
+    private void ClearSelectedFilter() => _selectedFilter = string.Empty;
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
@@ -576,6 +603,9 @@
         get
         {
             var tags = Opc.GetSelectedTags().AsEnumerable();
+            if (IsSelectedFilterActive)
+                tags = tags.Where(t => t.DisplayName.Contains(_selectedFilter, StringComparison.OrdinalIgnoreCase)
+                                    || t.NodeId.Contains(_selectedFilter, StringComparison.OrdinalIgnoreCase));
             tags = _selectedSort switch
             {
                 SortDirection.Ascending  => tags.OrderBy(t => t.DisplayName, StringComparer.OrdinalIgnoreCase),
