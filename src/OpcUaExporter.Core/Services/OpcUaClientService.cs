@@ -75,6 +75,14 @@ public class OpcUaClientService
     private readonly ConcurrentDictionary<string, X509Certificate2> _pendingCertificates = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, byte> _trustedThumbprints = new(StringComparer.OrdinalIgnoreCase);
 
+    // DataType NodeId -> display name, shared by the deep scan and on-demand expands (cleared per server).
+    private readonly ConcurrentDictionary<string, string?> _dataTypeNameCache = new(StringComparer.Ordinal);
+
+    // Long-lived session for on-demand tree expansion (see BrowseChildrenAsync).
+    private readonly SemaphoreSlim _interactiveSessionLock = new(1, 1);
+    private Session? _interactiveSession;
+    private string? _interactiveSessionKey;
+
     public OpcUaClientService(ILogger<OpcUaClientService> logger, DiagnosticsLogService diagnostics)
     {
         _logger = logger;
@@ -82,6 +90,13 @@ public class OpcUaClientService
         _configuration = new Lazy<Task<ApplicationConfiguration>>(BuildConfigurationAsync);
     }
 
+    /// <summary>
+    /// Browses the whole address space under the Objects folder. The tree is built top-down and published
+    /// as it goes: <paramref name="onTopStructureReady"/> receives the (live) top-level list as soon as it is
+    /// known, and each node's children appear via <see cref="OpcTag.PublishChildren"/> the moment they are
+    /// fetched, so the UI can show and explore the tree while the deep scan continues. Nodes the user already
+    /// expanded on demand (<see cref="BrowseChildrenAsync"/>) are reused rather than fetched twice.
+    /// </summary>
     public async Task<List<OpcTag>> BrowseAsync(
         ConnectionProfile profile,
         Action<List<OpcTag>>? onTopStructureReady = null,
@@ -94,41 +109,13 @@ public class OpcUaClientService
         var progress = new BrowseProgressState();
         progress.TryVisitNode(rootNodeId.ToString());
 
+        _dataTypeNameCache.Clear();
         _diagnostics.Add("Browse started.");
-        var references = await session.FetchReferencesAsync(rootNodeId, ct: ct);
-        var topLevelChildren = references
-            .Where(r => r.IsForward && r.NodeClass is NodeClass.Object or NodeClass.Variable)
-            .Select(r => (Reference: r, NodeId: ExpandedNodeId.ToNodeId(r.NodeId, session.NamespaceUris)))
-            .Where(x => x.NodeId is not null)
-            .Select(x => (x.Reference, NodeId: x.NodeId!))
-            .ToList();
-
-        var variableDataTypes = await ReadVariableDataTypesAsync(session, topLevelChildren, ct);
-
-        var tags = new List<OpcTag>(topLevelChildren.Count);
-        foreach (var (reference, childNodeId) in topLevelChildren)
+        var tags = await FetchChildTagsAsync(session, rootNodeId, ct);
+        foreach (var tag in tags)
         {
-            ct.ThrowIfCancellationRequested();
-
-            var tag = new OpcTag
-            {
-                NodeId = childNodeId.ToString(),
-                BrowseName = reference.BrowseName?.ToString() ?? string.Empty,
-                DisplayName = reference.DisplayName?.Text ?? childNodeId.ToString(),
-                NodeClass = reference.NodeClass.ToString()
-            };
-
-            if (reference.NodeClass == NodeClass.Variable &&
-                variableDataTypes.TryGetValue(tag.NodeId, out var dataTypeId) &&
-                dataTypeId is not null)
-            {
-                tag.DataType = await GetDataTypeNameCachedAsync(dataTypeId, session, progress);
-            }
-
-            if (reference.NodeClass == NodeClass.Variable)
+            if (tag.IsSelectable)
                 progress.IncrementVariableCount();
-
-            tags.Add(tag);
         }
 
         onTopStructureReady?.Invoke(tags);
@@ -159,6 +146,59 @@ public class OpcUaClientService
 
         _diagnostics.Add($"Browse completed. Scanned {progress.ScannedNodes} node(s). Found {CountVariables(tags)} variable tag(s).");
         return tags;
+    }
+
+    /// <summary>
+    /// Fetches one level of children of <paramref name="nodeId"/> (not yet published to any tree node), for
+    /// expanding a node on demand. Uses a long-lived interactive session so repeated expands don't each pay
+    /// for endpoint discovery and session activation, and so they don't queue behind the background deep scan.
+    /// </summary>
+    public async Task<List<OpcTag>> BrowseChildrenAsync(ConnectionProfile profile, string nodeId, CancellationToken ct = default)
+    {
+        var session = await GetInteractiveSessionAsync(profile, ct);
+        return await FetchChildTagsAsync(session, NodeId.Parse(nodeId), ct);
+    }
+
+    /// <summary>Closes the interactive session used by <see cref="BrowseChildrenAsync"/>, e.g. before browsing a (possibly different) server afresh.</summary>
+    public async Task ResetInteractiveSessionAsync()
+    {
+        await _interactiveSessionLock.WaitAsync();
+        try
+        {
+            _interactiveSession?.Dispose();
+            _interactiveSession = null;
+            _interactiveSessionKey = null;
+            _dataTypeNameCache.Clear();
+        }
+        finally
+        {
+            _interactiveSessionLock.Release();
+        }
+    }
+
+    private async Task<Session> GetInteractiveSessionAsync(ConnectionProfile profile, CancellationToken ct)
+    {
+        var key = string.Join('|', profile.EndpointUrl, profile.SecurityMode, profile.SecurityPolicy,
+            profile.AuthenticationType, profile.Username, profile.Password);
+
+        await _interactiveSessionLock.WaitAsync(ct);
+        try
+        {
+            if (_interactiveSession is { Connected: true } existing && _interactiveSessionKey == key)
+                return existing;
+
+            _interactiveSession?.Dispose();
+            _interactiveSession = null;
+
+            var session = await CreateSessionAsync(profile, ct);
+            _interactiveSession = session;
+            _interactiveSessionKey = key;
+            return session;
+        }
+        finally
+        {
+            _interactiveSessionLock.Release();
+        }
     }
 
     public async Task<List<TagReading>> ReadAsync(ConnectionProfile profile, IEnumerable<string> nodeIds, CancellationToken ct = default)
@@ -315,7 +355,12 @@ public class OpcUaClientService
         _diagnostics.Add("Connection test completed successfully.");
     }
 
-    public async Task<(IAsyncDisposable Handle, List<TagReading> InitialReadings)> SubscribeAsync(
+    /// <summary>
+    /// Opens a dedicated session with one subscription monitoring <paramref name="nodeIds"/>. The returned
+    /// handle can later add/remove monitored items in place (<see cref="ILiveSubscription.UpdateAsync"/>),
+    /// which is far cheaper than tearing the session down and building a new one for every change.
+    /// </summary>
+    public async Task<(ILiveSubscription Handle, List<TagReading> InitialReadings)> SubscribeAsync(
         ConnectionProfile profile,
         IEnumerable<string> nodeIds,
         Action<TagReading> onUpdate,
@@ -348,57 +393,17 @@ public class OpcUaClientService
                 Priority = 0
             };
 
+            var handle = new SessionSubscriptionHandle(session, subscription, onUpdate, _logger, _diagnostics);
             foreach (var id in ids)
             {
                 ct.ThrowIfCancellationRequested();
-
-                var monitoredItem = new MonitoredItem(subscription.DefaultItem)
-                {
-                    DisplayName = id,
-                    StartNodeId = NodeId.Parse(id),
-                    AttributeId = Attributes.Value,
-                    SamplingInterval = 1000,
-                    QueueSize = 100,
-                    DiscardOldest = true
-                };
-
-                monitoredItem.Notification += (_, e) =>
-                {
-                    try
-                    {
-                        if (e.NotificationValue is not MonitoredItemNotification notification)
-                            return;
-
-                        var value = notification.Value;
-                        var update = new TagReading
-                        {
-                            NodeId = monitoredItem.DisplayName,
-                            DisplayName = monitoredItem.DisplayName,
-                            Value = value.WrappedValue.Value,
-                            Quality = value.StatusCode.ToString(),
-                            Timestamp = value.SourceTimestamp.ToString("o")
-                        };
-
-                        onUpdate(update);
-                    }
-                    catch (Exception ex)
-                    {
-                        // This runs on the OPC UA SDK's internal publish-response thread.
-                        // An unhandled exception here (e.g. while the UI thread is busy
-                        // pumping a modal dialog) would otherwise take down the whole process.
-                        _logger.LogError(ex, "Error handling subscription notification for {NodeId}", monitoredItem.DisplayName);
-                    }
-                };
-
-                subscription.AddItem(monitoredItem);
+                handle.AddItem(id);
             }
 
             session.AddSubscription(subscription);
             await subscription.CreateAsync(ct);
 
             _diagnostics.Add($"Subscription started. Monitoring {ids.Count} tag(s).");
-
-            var handle = new SessionSubscriptionHandle(session, subscription, _diagnostics);
             return (handle, initialReadings);
         }
         catch
@@ -1105,12 +1110,8 @@ public class OpcUaClientService
         return 0;
     }
 
-    private async Task<List<OpcTag>> BrowseNodeRecursiveAsync(
-        Session session,
-        NodeId nodeId,
-        BrowseProgressState progress,
-        Action<int>? onVariableCountChanged,
-        CancellationToken ct)
+    /// <summary>Fetches the Object/Variable children of a node as unpublished <see cref="OpcTag"/>s, sorted by NodeId, with Variable data types resolved.</summary>
+    private async Task<List<OpcTag>> FetchChildTagsAsync(Session session, NodeId nodeId, CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
@@ -1123,24 +1124,15 @@ public class OpcUaClientService
             .ToList();
 
         var variableDataTypes = await ReadVariableDataTypesAsync(session, forwardChildren, ct);
-        var children = new List<OpcTag>();
+        var children = new List<OpcTag>(forwardChildren.Count);
 
         foreach (var (reference, childNodeId) in forwardChildren)
         {
             ct.ThrowIfCancellationRequested();
 
-            var childNodeIdText = childNodeId.ToString();
-            var isFirstVisit = progress.TryVisitNode(childNodeIdText);
-
-            var scannedNodes = progress.IncrementScannedNodes();
-            if (scannedNodes % BrowseProgressLogInterval == 0)
-            {
-                _diagnostics.Add($"Browse in progress: scanned {scannedNodes} node(s). Latest node: {childNodeId}");
-            }
-
             var tag = new OpcTag
             {
-                NodeId = childNodeIdText,
+                NodeId = childNodeId.ToString(),
                 BrowseName = reference.BrowseName?.ToString() ?? string.Empty,
                 DisplayName = reference.DisplayName?.Text ?? childNodeId.ToString(),
                 NodeClass = reference.NodeClass.ToString()
@@ -1150,33 +1142,66 @@ public class OpcUaClientService
                 variableDataTypes.TryGetValue(tag.NodeId, out var dataTypeId) &&
                 dataTypeId is not null)
             {
-                tag.DataType = await GetDataTypeNameCachedAsync(dataTypeId, session, progress);
+                tag.DataType = await GetDataTypeNameCachedAsync(dataTypeId, session);
             }
 
-            if (reference.NodeClass == NodeClass.Variable)
+            children.Add(tag);
+        }
+
+        children.Sort((a, b) => string.Compare(a.NodeId, b.NodeId, StringComparison.OrdinalIgnoreCase));
+        return children;
+    }
+
+    /// <summary>
+    /// Deep-scans the subtree under <paramref name="tag"/>: publishes its children (unless an on-demand expand
+    /// already did), then recurses. A node reached a second time (the address space is a graph, not a tree) is
+    /// left unloaded instead of being scanned again, so it can still be expanded on demand.
+    /// </summary>
+    private async Task BrowseSubtreeAsync(
+        Session session,
+        OpcTag tag,
+        BrowseProgressState progress,
+        Action<int>? onVariableCountChanged,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        List<OpcTag> children;
+        if (tag.ChildrenLoaded)
+        {
+            children = tag.Children;
+        }
+        else
+        {
+            try
+            {
+                children = tag.PublishChildren(await FetchChildTagsAsync(session, NodeId.Parse(tag.NodeId), ct));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                // Leave the node unloaded: the user can still retry by expanding it.
+                return;
+            }
+        }
+
+        foreach (var child in children)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var scannedNodes = progress.IncrementScannedNodes();
+            if (scannedNodes % BrowseProgressLogInterval == 0)
+                _diagnostics.Add($"Browse in progress: scanned {scannedNodes} node(s). Latest node: {child.NodeId}");
+
+            if (child.IsSelectable)
             {
                 var variableCount = progress.IncrementVariableCount();
                 if (variableCount % BrowseVariableProgressReportInterval == 0)
                     onVariableCountChanged?.Invoke(variableCount);
             }
 
-            if (isFirstVisit && reference.NodeClass is NodeClass.Object or NodeClass.Variable)
-            {
-                try
-                {
-                    var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, onVariableCountChanged, ct);
-                    tag.Children = nested;
-                }
-                catch
-                {
-                    tag.Children = [];
-                }
-            }
-
-            children.Add(tag);
+            if (progress.TryVisitNode(child.NodeId))
+                await BrowseSubtreeAsync(session, child, progress, onVariableCountChanged, ct);
         }
-
-        return children;
     }
 
     private async Task BrowseTopLevelTagAsync(
@@ -1188,20 +1213,8 @@ public class OpcUaClientService
     {
         ct.ThrowIfCancellationRequested();
 
-        var childNodeId = NodeId.Parse(tag.NodeId);
-        var isFirstVisit = progress.TryVisitNode(tag.NodeId);
-        if (isFirstVisit && (tag.NodeClass == NodeClass.Object.ToString() || tag.NodeClass == NodeClass.Variable.ToString()))
-        {
-            try
-            {
-                var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, onVariableCountChanged, ct);
-                tag.Children = nested;
-            }
-            catch
-            {
-                tag.Children = [];
-            }
-        }
+        if (progress.TryVisitNode(tag.NodeId))
+            await BrowseSubtreeAsync(session, tag, progress, onVariableCountChanged, ct);
 
         onVariableCountChanged?.Invoke(progress.VariableCount);
     }
@@ -1256,14 +1269,14 @@ public class OpcUaClientService
         return map;
     }
 
-    private static async Task<string?> GetDataTypeNameCachedAsync(NodeId dataTypeId, Session session, BrowseProgressState progress)
+    private async Task<string?> GetDataTypeNameCachedAsync(NodeId dataTypeId, Session session)
     {
         var key = dataTypeId.ToString();
-        if (progress.DataTypeNameCache.TryGetValue(key, out var cached))
+        if (_dataTypeNameCache.TryGetValue(key, out var cached))
             return cached;
 
         var resolved = await GetDataTypeName(dataTypeId, session);
-        progress.DataTypeNameCache.TryAdd(key, resolved);
+        _dataTypeNameCache.TryAdd(key, resolved);
         return resolved;
     }
 
@@ -1405,8 +1418,6 @@ public class OpcUaClientService
         public int ScannedNodes => Volatile.Read(ref _scannedNodes);
         public int VariableCount => Volatile.Read(ref _variableCount);
 
-        public ConcurrentDictionary<string, string?> DataTypeNameCache { get; } = new(StringComparer.Ordinal);
-
         public ConcurrentDictionary<string, byte> VisitedNodeIds { get; } = new(StringComparer.Ordinal);
 
         public int IncrementScannedNodes()
@@ -1419,41 +1430,145 @@ public class OpcUaClientService
             => VisitedNodeIds.TryAdd(nodeId, 0);
     }
 
-    private sealed class SessionSubscriptionHandle : IAsyncDisposable
+    private sealed class SessionSubscriptionHandle : ILiveSubscription
     {
         private readonly Session _session;
         private readonly Subscription _subscription;
+        private readonly Action<TagReading> _onUpdate;
+        private readonly ILogger _logger;
         private readonly DiagnosticsLogService _diagnostics;
+        private readonly Dictionary<string, MonitoredItem> _items = new(StringComparer.OrdinalIgnoreCase);
+        private readonly SemaphoreSlim _gate = new(1, 1);
         private bool _disposed;
 
-        public SessionSubscriptionHandle(Session session, Subscription subscription, DiagnosticsLogService diagnostics)
+        public SessionSubscriptionHandle(
+            Session session,
+            Subscription subscription,
+            Action<TagReading> onUpdate,
+            ILogger logger,
+            DiagnosticsLogService diagnostics)
         {
             _session = session;
             _subscription = subscription;
+            _onUpdate = onUpdate;
+            _logger = logger;
             _diagnostics = diagnostics;
+        }
+
+        public IReadOnlyCollection<string> NodeIds => _items.Keys.ToList();
+
+        public void AddItem(string id)
+        {
+            var monitoredItem = new MonitoredItem(_subscription.DefaultItem)
+            {
+                DisplayName = id,
+                StartNodeId = NodeId.Parse(id),
+                AttributeId = Attributes.Value,
+                SamplingInterval = 1000,
+                QueueSize = 100,
+                DiscardOldest = true
+            };
+
+            monitoredItem.Notification += (_, e) =>
+            {
+                try
+                {
+                    if (e.NotificationValue is not MonitoredItemNotification notification)
+                        return;
+
+                    var value = notification.Value;
+                    var update = new TagReading
+                    {
+                        NodeId = monitoredItem.DisplayName,
+                        DisplayName = monitoredItem.DisplayName,
+                        Value = value.WrappedValue.Value,
+                        Quality = value.StatusCode.ToString(),
+                        Timestamp = value.SourceTimestamp.ToString("o")
+                    };
+
+                    _onUpdate(update);
+                }
+                catch (Exception ex)
+                {
+                    // This runs on the OPC UA SDK's internal publish-response thread.
+                    // An unhandled exception here (e.g. while the UI thread is busy
+                    // pumping a modal dialog) would otherwise take down the whole process.
+                    _logger.LogError(ex, "Error handling subscription notification for {NodeId}", monitoredItem.DisplayName);
+                }
+            };
+
+            _subscription.AddItem(monitoredItem);
+            _items[id] = monitoredItem;
+        }
+
+        public async Task<List<TagReading>> UpdateAsync(IReadOnlyCollection<string> nodeIds, CancellationToken ct = default)
+        {
+            await _gate.WaitAsync(ct);
+            try
+            {
+                ObjectDisposedException.ThrowIf(_disposed, this);
+
+                var desired = new HashSet<string>(nodeIds.Where(id => !string.IsNullOrWhiteSpace(id)), StringComparer.OrdinalIgnoreCase);
+                var toRemove = _items.Where(kv => !desired.Contains(kv.Key)).ToList();
+                var toAdd = desired.Where(id => !_items.ContainsKey(id)).ToList();
+
+                if (toRemove.Count == 0 && toAdd.Count == 0)
+                    return [];
+
+                // The local item list changes synchronously, so if applying is canceled half-way the
+                // SDK still holds the pending creates/deletes and the next ApplyChanges finishes them.
+                if (toRemove.Count > 0)
+                {
+                    _subscription.RemoveItems(toRemove.Select(kv => kv.Value));
+                    foreach (var (id, _) in toRemove)
+                        _items.Remove(id);
+                }
+
+                foreach (var id in toAdd)
+                    AddItem(id);
+
+                await _subscription.ApplyChangesAsync(ct);
+                _diagnostics.Add($"Subscription updated: +{toAdd.Count} / -{toRemove.Count} tag(s). Monitoring {_items.Count} tag(s).");
+
+                return toAdd.Count > 0
+                    ? await ReadCurrentValuesAsync(_session, toAdd, ct)
+                    : [];
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
 
         public async ValueTask DisposeAsync()
         {
-            if (_disposed)
-                return;
-
+            await _gate.WaitAsync();
             try
             {
-                if (_session.Connected)
-                {
-                    await _subscription.DeleteAsync(true);
-                    await _session.RemoveSubscriptionAsync(_subscription);
-                }
-            }
-            catch
-            {
-                // best effort cleanup
-            }
+                if (_disposed)
+                    return;
 
-            _session.Dispose();
-            _disposed = true;
-            _diagnostics.Add("Subscription stopped.");
+                try
+                {
+                    if (_session.Connected)
+                    {
+                        await _subscription.DeleteAsync(true);
+                        await _session.RemoveSubscriptionAsync(_subscription);
+                    }
+                }
+                catch
+                {
+                    // best effort cleanup
+                }
+
+                _session.Dispose();
+                _disposed = true;
+                _diagnostics.Add("Subscription stopped.");
+            }
+            finally
+            {
+                _gate.Release();
+            }
         }
     }
 }

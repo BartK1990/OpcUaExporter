@@ -3,10 +3,14 @@
 <div class="tag-node @(Tag.NodeClass == "Object" ? "tag-object" : "tag-variable")">
     <div class="tag-row" @onclick="Toggle"
          @oncontextmenu="@(e => OnContextMenu.InvokeAsync((Tag, e)))" @oncontextmenu:preventDefault>
-        @if (Tag.Children.Any())
+        @if (Tag.IsLoadingChildren)
         {
-            <span class="chevron @(IsExpanded ? "expanded" : "")"
-                  title="@(IsExpanded ? "Collapse" : "Expand")"
+            <span class="chevron"><span class="spinner spinner-xs"></span></span>
+        }
+        else if (IsExpandable)
+        {
+            <span class="chevron @(IsExpanded && Tag.Children.Any() ? "expanded" : "")"
+                  title="@(Tag.CanLoadChildren ? "Expand (loads from server)" : IsExpanded ? "Collapse" : "Expand")"
                   @onclick="ToggleExpanded" @onclick:stopPropagation>▶</span>
         }
         else
@@ -59,6 +63,7 @@
                          OnSelectAllInFolder="OnSelectAllInFolder"
                          OnSelectNoneInFolder="OnSelectNoneInFolder"
                          OnContextMenu="OnContextMenu"
+                         OnLoadChildren="OnLoadChildren"
                          SubscribedNodeIds="SubscribedNodeIds"
                          FilterActive="FilterActive" />
             }
@@ -79,6 +84,9 @@
     [Parameter] public EventCallback<OpcTag> OnSelectAllInFolder { get; set; }
     [Parameter] public EventCallback<OpcTag> OnSelectNoneInFolder { get; set; }
     [Parameter] public EventCallback<(OpcTag Tag, MouseEventArgs Args)> OnContextMenu { get; set; }
+
+    /// <summary>Asks the host to fetch this node's children from the server (it isn't browsed yet).</summary>
+    [Parameter] public EventCallback<OpcTag> OnLoadChildren { get; set; }
     [Parameter] public IReadOnlySet<string> SubscribedNodeIds { get; set; } = new HashSet<string>();
     [Parameter] public bool FilterActive { get; set; }
 
@@ -87,6 +95,9 @@
     /// <summary>While a search/selection filter is active, every rendered branch is forced open
     /// (the tree is already pruned to matches, so there's nothing to hide behind a collapsed folder).</summary>
     private bool IsExpanded => FilterActive || _expanded;
+
+    /// <summary>Loaded nodes with children, plus nodes not browsed yet (which may have some: expanding asks the server).</summary>
+    private bool IsExpandable => Tag.Children.Any() || (Tag.CanLoadChildren && !FilterActive);
 
     private const int ChildBatchSize = 200;
 
@@ -103,14 +114,24 @@
         if (Tag.IsSelectable)
             return OnToggle.InvokeAsync(Tag);
 
-        ToggleExpanded();
-        return Task.CompletedTask;
+        return ToggleExpanded();
     }
 
-    private void ToggleExpanded()
+    private Task ToggleExpanded()
     {
+        if (Tag.IsLoadingChildren)
+            return Task.CompletedTask;
+
+        // Not browsed yet (the background scan hasn't reached it): fetch just this node's children now.
+        if (Tag.CanLoadChildren && !FilterActive)
+        {
+            _expanded = true;
+            return OnLoadChildren.InvokeAsync(Tag);
+        }
+
         if (Tag.Children.Any())
             _expanded = !_expanded;
+        return Task.CompletedTask;
     }
 
     private void ShowMoreChildren()

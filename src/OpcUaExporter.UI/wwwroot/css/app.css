@@ -291,6 +291,15 @@ body {
     animation: spin .7s linear infinite;
 }
 
+.spinner-xs {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-width: 1.5px;
+    vertical-align: middle;
+}
+
+.subscribe-pending { margin-left: 4px; color: var(--text-muted); }
+
 /* ── Status bar ─────────────────────────────────────────── */
 .status-bar {
     margin-top: auto;
