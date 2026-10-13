@@ -87,7 +87,7 @@ public class OpcUaService
 
     // CSV recording (column-per-tag: one row per sampling interval, latest known value/quality per tag)
     public const int DefaultRecordingIntervalSeconds = 1;
-    public const int MaxRecordingIntervalSeconds = 3600;
+    public const int MaxRecordingIntervalSeconds = 600;
     private int _recordingIntervalSeconds = DefaultRecordingIntervalSeconds;
     private int _activeRecordingIntervalSeconds = DefaultRecordingIntervalSeconds;
     private DateTime? _lastRecordedSlotUtc;
