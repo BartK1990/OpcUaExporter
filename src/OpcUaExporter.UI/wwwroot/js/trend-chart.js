@@ -19,7 +19,8 @@
         windowMs: DEFAULT_WINDOW_MS,
         resizeObserver: null,
         rafScheduled: false,
-        tickInterval: null
+        tickInterval: null,
+        hover: null          // { x, y } in canvas pixels while the mouse is over the chart
     };
 
     function colorFor(nodeId) {
@@ -60,6 +61,24 @@
         return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
 
+    // Compact value text for the hover tooltip: integers as-is, otherwise up to 4 decimals.
+    function formatValue(v) {
+        if (v === null || v === undefined || !isFinite(v)) return '-';
+        if (Number.isInteger(v)) return String(v);
+        return String(parseFloat(v.toFixed(4)));
+    }
+
+    function onMouseMove(e) {
+        var dpr = window.devicePixelRatio || 1;
+        state.hover = { x: e.offsetX * dpr, y: e.offsetY * dpr };
+        scheduleDraw();
+    }
+
+    function onMouseLeave() {
+        state.hover = null;
+        scheduleDraw();
+    }
+
     function axisOf(s) { return s.axis === 'right' ? 'right' : 'left'; }
 
     // Grid/label colors follow the current light/dark theme (set via CSS custom
@@ -83,6 +102,9 @@
         var w = state.canvas.width;
         var h = state.canvas.height;
         var colors = themeColors();
+        var cs = getComputedStyle(document.documentElement);
+        var tooltipBg = cs.getPropertyValue('--bg-1').trim() || '#13161b';
+        var tooltipBorder = cs.getPropertyValue('--border-hi').trim() || '#3d4758';
 
         ctx.save();
         ctx.clearRect(0, 0, w, h);
@@ -313,6 +335,7 @@
         }
         ctx.textAlign = 'left';
 
+        var drawn = [];   // [{ id, label, color, pts, yFor }] for the hover readout
         state.order.forEach(function (id) {
             var s = state.series[id];
             if (!s) return;
@@ -321,6 +344,7 @@
 
             var pts = effectivePoints(s);
             if (pts.length === 0) return;
+            drawn.push({ id: id, label: s.label, color: colorFor(id), pts: pts, yFor: yFor });
 
             ctx.strokeStyle = colorFor(id);
             ctx.lineWidth = 1.75 * dpr;
@@ -338,14 +362,104 @@
             ctx.fill();
         });
 
+        drawHover(drawn);
+
         ctx.restore();
+
+        // Vertical line at the hovered second, a marker on each series, and a tooltip
+        // listing the timestamp and every series' value at that second. The hovered
+        // time snaps to the same one-second grid the series are drawn on, so the values
+        // shown are exactly the points under the line.
+        function drawHover(series) {
+            var hv = state.hover;
+            if (!hv || hv.x < padL || hv.x > padL + plotW || hv.y < padT || hv.y > padT + plotH) return;
+
+            var tRaw = tMin + ((hv.x - padL) / plotW) * (tMax - tMin);
+            var tHover = Math.round(tRaw / HEARTBEAT_MS) * HEARTBEAT_MS;
+            if (tHover < tMin) tHover = tMin;
+            if (tHover > tMax) tHover = tMax;
+            var x = xFor(tHover);
+
+            ctx.strokeStyle = colors.label;
+            ctx.globalAlpha = 0.55;
+            ctx.lineWidth = 1 * dpr;
+            ctx.setLineDash([4 * dpr, 3 * dpr]);
+            ctx.beginPath();
+            ctx.moveTo(x, padT);
+            ctx.lineTo(x, padT + plotH);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 1;
+
+            var rows = [];
+            series.forEach(function (sr) {
+                var i = Math.round((tHover - sr.pts[0].t) / HEARTBEAT_MS);
+                if (i < 0 || i >= sr.pts.length) return;
+                var p = sr.pts[i];
+                if (p.v === null || p.v === undefined) return;
+                ctx.fillStyle = sr.color;
+                ctx.beginPath();
+                ctx.arc(x, sr.yFor(p.v), 3.5 * dpr, 0, Math.PI * 2);
+                ctx.fill();
+                rows.push({ color: sr.color, text: sr.label + ': ' + formatValue(p.v) });
+            });
+
+            var fontPx = 12 * dpr;
+            var lineH = 16 * dpr;
+            var pad = 6 * dpr;
+            var swatch = 8 * dpr;
+            var title = formatTime(tHover);
+            ctx.font = 'bold ' + fontPx + 'px monospace';
+            var boxW = ctx.measureText(title).width;
+            ctx.font = fontPx + 'px monospace';
+            rows.forEach(function (r) {
+                boxW = Math.max(boxW, swatch + 6 * dpr + ctx.measureText(r.text).width);
+            });
+            boxW += pad * 2;
+            var boxH = pad * 2 + lineH * (rows.length + 1);
+
+            var bx = x + 10 * dpr;
+            if (bx + boxW > w - 2 * dpr) bx = x - 10 * dpr - boxW;
+            if (bx < 2 * dpr) bx = 2 * dpr;
+            var by = Math.min(Math.max(padT, hv.y - boxH / 2), Math.max(padT, padT + plotH - boxH));
+
+            ctx.globalAlpha = 0.94;
+            ctx.fillStyle = tooltipBg;
+            ctx.fillRect(bx, by, boxW, boxH);
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = tooltipBorder;
+            ctx.lineWidth = 1 * dpr;
+            ctx.strokeRect(bx, by, boxW, boxH);
+
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'middle';
+            ctx.fillStyle = colors.label;
+            ctx.font = 'bold ' + fontPx + 'px monospace';
+            ctx.fillText(title, bx + pad, by + pad + lineH / 2);
+            ctx.font = fontPx + 'px monospace';
+            rows.forEach(function (r, i) {
+                var ry = by + pad + lineH * (i + 1) + lineH / 2;
+                ctx.fillStyle = r.color;
+                ctx.fillRect(bx + pad, ry - swatch / 2, swatch, swatch);
+                ctx.fillStyle = colors.label;
+                ctx.fillText(r.text, bx + pad + swatch + 6 * dpr, ry);
+            });
+        }
     }
 
     window.trendChart = {
         init: function (canvasEl) {
             if (!canvasEl) return;
+            if (state.canvas && state.canvas !== canvasEl) {
+                state.canvas.removeEventListener('mousemove', onMouseMove);
+                state.canvas.removeEventListener('mouseleave', onMouseLeave);
+            }
             state.canvas = canvasEl;
             state.ctx = canvasEl.getContext('2d');
+            state.hover = null;
+            // addEventListener ignores a listener already registered, so re-init on the same canvas is safe.
+            canvasEl.addEventListener('mousemove', onMouseMove);
+            canvasEl.addEventListener('mouseleave', onMouseLeave);
             state.wrap = canvasEl.parentElement;
             state.order = [];
             state.series = {};
