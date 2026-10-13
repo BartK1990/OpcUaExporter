@@ -132,7 +132,7 @@ The test project targets `net8.0` and references only `OpcUaExporter.Core` and
 3. Click **Browse Tags** — the address space tree loads in the tag browser (top-level structure appears first, then the tree fills in as the deep scan continues in the background; scanning can run in parallel — see `ConnectionProfile.EnableParallelBrowse`). You don't have to wait for it: expanding a node the scan hasn't reached yet fetches its children from the server right away.
 4. **Check** the tags you want (or use All / None / per-folder shortcuts).
 5. Click **Read Values** for a one-off read, or **Subscribe** to get live updates pushed into the readings table. Subscribe/trend checkboxes respond instantly — changes are queued and applied to the server in the background (a small spinner marks rows still being applied).
-6. With a live subscription active, optionally **record** updates to a CSV file and/or plot selected tags on the **live trend chart**.
+6. With a live subscription active, optionally **record** to a CSV file (one row per interval — 1 s by default, adjustable next to the button — stamped with whole-second UTC timestamps) and/or plot selected tags on the **live trend chart** (the tag list shows each tag's current value; hover the chart for a crosshair with the values at that second).
 7. Choose a **format** (CSV, JSON, or Excel), enter or browse for an **output path**, and click **Export Selected**.
 8. If the server presents an untrusted certificate, it appears in the sidebar for you to **Trust** or **Reject** before retrying the connection.
 9. Check the **Diagnostics** page for a running log of connection/browse/read/subscribe activity.

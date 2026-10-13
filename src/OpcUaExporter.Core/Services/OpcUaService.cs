@@ -85,7 +85,13 @@ public class OpcUaService
     public IReadOnlySet<string> SubscribedNodeIds => _subscribedNodeIds;
     private Dictionary<string, string> _displayNameByNodeId = new(StringComparer.OrdinalIgnoreCase);
 
-    // CSV recording (column-per-tag: one row per live update, latest known value/quality per tag)
+    // CSV recording (column-per-tag: one row per sampling interval, latest known value/quality per tag)
+    public const int DefaultRecordingIntervalSeconds = 1;
+    public const int MaxRecordingIntervalSeconds = 600;
+    private int _recordingIntervalSeconds = DefaultRecordingIntervalSeconds;
+    private int _activeRecordingIntervalSeconds = DefaultRecordingIntervalSeconds;
+    private DateTime? _lastRecordedSlotUtc;
+    private CancellationTokenSource? _recordingCts;
     private StreamWriter? _recordingWriter;
     private List<string> _recordingNodeIds = new();
     private HashSet<string> _recordingNodeIdSet = new(StringComparer.OrdinalIgnoreCase);
@@ -93,6 +99,13 @@ public class OpcUaService
     public bool   IsRecording       { get; private set; }
     public string? RecordingFilePath { get; private set; }
     public int    RecordedRowCount  { get; private set; }
+
+    /// <summary>Seconds between CSV recording rows. Applies to the next recording started; clamped to 1..<see cref="MaxRecordingIntervalSeconds"/>.</summary>
+    public int RecordingIntervalSeconds
+    {
+        get => _recordingIntervalSeconds;
+        set => _recordingIntervalSeconds = Math.Clamp(value, 1, MaxRecordingIntervalSeconds);
+    }
 
     // Live trend chart (subset of subscribed tags plotted on the chart)
     private readonly List<string> _trendedNodeIds = new();
@@ -693,9 +706,16 @@ public class OpcUaService
             header.AddRange(selected.Select(id => _displayNameByNodeId.TryGetValue(id, out var dn) ? dn : id));
             writer.WriteLine(string.Join(',', header.Select(EscapeCsv)));
 
+            CancellationTokenSource? previousCts;
+            var recordingCts = new CancellationTokenSource();
+            var intervalSeconds = RecordingIntervalSeconds;
             lock (_subscriptionSync)
             {
                 _recordingWriter?.Dispose();
+                previousCts = _recordingCts;
+                _recordingCts = recordingCts;
+                _activeRecordingIntervalSeconds = intervalSeconds;
+                _lastRecordedSlotUtc = null;
                 _recordingWriter = writer;
                 RecordingFilePath = filePath;
                 RecordedRowCount = 0;
@@ -714,7 +734,12 @@ public class OpcUaService
                 }
             }
 
-            SetStatus($"Recording selected tags to: {filePath}");
+            previousCts?.Cancel();
+            previousCts?.Dispose();
+            WriteRecordingSample(DateTime.UtcNow);
+            _ = RunRecordingLoopAsync(intervalSeconds, recordingCts.Token);
+
+            SetStatus($"Recording selected tags every {intervalSeconds} s to: {filePath}");
         });
     }
 
@@ -729,16 +754,22 @@ public class OpcUaService
     private void StopRecordingInternal(string? diagnosticsMessage = null)
     {
         StreamWriter? writer;
+        CancellationTokenSource? recordingCts;
         lock (_subscriptionSync)
         {
             writer = _recordingWriter;
             _recordingWriter = null;
+            recordingCts = _recordingCts;
+            _recordingCts = null;
+            _lastRecordedSlotUtc = null;
             IsRecording = false;
             _recordingNodeIds = new();
             _recordingNodeIdSet = new(StringComparer.OrdinalIgnoreCase);
             _recordingLatestByNodeId.Clear();
         }
 
+        recordingCts?.Cancel();
+        recordingCts?.Dispose();
         writer?.Dispose();
 
         if (diagnosticsMessage is not null)
@@ -1446,8 +1477,9 @@ public class OpcUaService
                 existing.Error = update.Error;
             }
 
+            // Only remember the value here; the recording loop writes one row per interval.
             if (IsRecording && _recordingNodeIdSet.Contains(update.NodeId))
-                WriteRecordingRow(update);
+                _recordingLatestByNodeId[update.NodeId] = update;
         }
 
         if (_trendedNodeIds.Contains(update.NodeId, StringComparer.OrdinalIgnoreCase))
@@ -1456,24 +1488,68 @@ public class OpcUaService
         Notify();
     }
 
-    /// <summary>Writes one wide-format row: the triggering update's timestamp, plus the latest known value
-    /// (or "-" if never received, errored, or of bad quality) for every recorded tag.</summary>
-    private void WriteRecordingRow(TagReading update)
+    /// <summary>Writes a recording row at every interval boundary until the recording is stopped.</summary>
+    private async Task RunRecordingLoopAsync(int intervalSeconds, CancellationToken ct)
     {
-        if (_recordingWriter is null)
-            return;
-
-        _recordingLatestByNodeId[update.NodeId] = update;
-
-        var fields = new List<string> { EscapeCsv(update.Timestamp ?? DateTime.UtcNow.ToString("o")) };
-        foreach (var nodeId in _recordingNodeIds)
+        try
         {
-            _recordingLatestByNodeId.TryGetValue(nodeId, out var reading);
-            fields.Add(EscapeCsv(IsBadQuality(reading) ? "-" : reading!.Value?.ToString() ?? "-"));
+            while (!ct.IsCancellationRequested)
+            {
+                var now = DateTime.UtcNow;
+                var next = RecordingSlot(now, intervalSeconds).AddSeconds(intervalSeconds);
+                // A few ms past the boundary, so the floored slot is the boundary itself, not the one before.
+                await Task.Delay(next - now + TimeSpan.FromMilliseconds(10), ct);
+                if (WriteRecordingSample(DateTime.UtcNow))
+                    Notify();
+            }
         }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CSV recording loop failed");
+            StopRecordingInternal($"Recording stopped: {ex.Message}");
+            SetStatus($"Recording stopped: {ex.Message}", isError: true);
+        }
+    }
 
-        _recordingWriter.WriteLine(string.Join(',', fields));
-        RecordedRowCount++;
+    /// <summary>The start of the recording interval containing <paramref name="utc"/>: whole seconds, aligned to a multiple of the interval.</summary>
+    internal static DateTime RecordingSlot(DateTime utc, int intervalSeconds)
+    {
+        var intervalTicks = TimeSpan.TicksPerSecond * Math.Max(1, intervalSeconds);
+        return new DateTime(utc.Ticks - utc.Ticks % intervalTicks, DateTimeKind.Utc);
+    }
+
+    internal static string FormatRecordingTimestamp(DateTime slotUtc)
+        => slotUtc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Writes one wide-format row stamped with the interval slot of <paramref name="utcNow"/> (whole seconds), plus
+    /// the latest known value (or "-" if never received, errored, or of bad quality) for every recorded tag.
+    /// A slot already written is skipped, so the file never holds duplicate timestamps.</summary>
+    internal bool WriteRecordingSample(DateTime utcNow)
+    {
+        lock (_subscriptionSync)
+        {
+            if (_recordingWriter is null)
+                return false;
+
+            var slot = RecordingSlot(utcNow, _activeRecordingIntervalSeconds);
+            if (_lastRecordedSlotUtc is { } last && slot <= last)
+                return false;
+
+            var fields = new List<string> { FormatRecordingTimestamp(slot) };
+            foreach (var nodeId in _recordingNodeIds)
+            {
+                _recordingLatestByNodeId.TryGetValue(nodeId, out var reading);
+                fields.Add(EscapeCsv(IsBadQuality(reading) ? "-" : reading!.Value?.ToString() ?? "-"));
+            }
+
+            _recordingWriter.WriteLine(string.Join(',', fields));
+            _lastRecordedSlotUtc = slot;
+            RecordedRowCount++;
+            return true;
+        }
     }
 
     private static bool IsBadQuality(TagReading? reading)

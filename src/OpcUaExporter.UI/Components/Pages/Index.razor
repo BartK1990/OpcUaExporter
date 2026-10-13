@@ -240,6 +240,12 @@
                             <button class="btn btn-secondary" @onclick="StartRecording" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                                 ⏺ Record to CSV
                             </button>
+                            <label class="trend-window-control" title="Seconds between rows in the CSV recording">
+                                every
+                                <input type="number" class="trend-window-input" min="1" max="@OpcUaService.MaxRecordingIntervalSeconds" step="1"
+                                       value="@Opc.RecordingIntervalSeconds" @onchange="OnRecordingIntervalChanged" />
+                                s
+                            </label>
                         }
                         else
                         {
@@ -437,7 +443,12 @@
                             @if (!_legendCollapsed)
                             {
                                 <div class="chart-legend-list">
-                                    @{ var trendIndex = 0; }
+                                    @{
+                                        var trendIndex = 0;
+                                        var readingsById = Opc.LastReadings
+                                            .GroupBy(r => r.NodeId, StringComparer.OrdinalIgnoreCase)
+                                            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+                                    }
                                     @foreach (var t in Opc.GetTrendedTagInfos())
                                     {
                                         var color = Palette[trendIndex++ % Palette.Length];
@@ -445,6 +456,8 @@
                                         <div class="legend-row">
                                             <span class="legend-dot" style="background:@color;"></span>
                                             <span class="legend-name" title="@t.NodeId">@t.DisplayName</span>
+                                            @{ var legendValue = FormatLegendValue(readingsById.GetValueOrDefault(t.NodeId)); }
+                                            <span class="legend-value" title="@legendValue">@legendValue</span>
                                             @if (isNonNumeric)
                                             {
                                                 <span class="legend-note" title="This tag's value isn't numeric, so it can't be plotted.">n/a</span>
@@ -968,6 +981,30 @@
     }
 
     private async Task StopRecording() => await Opc.StopRecordingAsync();
+
+    private void OnRecordingIntervalChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var seconds))
+            Opc.RecordingIntervalSeconds = seconds;
+    }
+
+    /// <summary>Current value shown next to a trended tag's name in the chart legend.</summary>
+    private static string FormatLegendValue(TagReading? reading)
+    {
+        if (reading is null || reading.Error is not null)
+            return "-";
+
+        var value = reading.Value is Array { Length: 1 } single ? single.GetValue(0) : reading.Value;
+        return value switch
+        {
+            null => "-",
+            double d => d.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+            float f => f.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+            decimal m => m.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+            IFormattable fmt => fmt.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? "-"
+        };
+    }
 
     private async Task TrustCertificate(string thumbprint)
         => await Opc.TrustCertificateAsync(thumbprint);
