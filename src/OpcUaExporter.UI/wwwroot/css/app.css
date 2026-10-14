@@ -469,6 +469,7 @@ body.row-resizing * {
 
 /* 1.5x the 12px x-axis tick labels. */
 .chart-clock {
+    font-family: var(--font-mono);
     font-size: 18px;
     font-weight: bold;
     color: var(--text-primary);
@@ -650,8 +651,10 @@ body.row-resizing * {
     padding: 3px 6px;
 }
 
+/* Fits all 19 characters of "YYYY-MM-DD HH:MM:SS" in the monospace font. */
 .write-input-datetime {
-    width: 140px;
+    width: calc(19ch + 14px);
+    flex-shrink: 0;
 }
 
 .write-input-invalid,
