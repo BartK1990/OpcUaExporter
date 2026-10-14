@@ -10,6 +10,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpcUaExporter.Wpf", "src\Op
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpcUaExporter.Tests", "tests\OpcUaExporter.Tests\OpcUaExporter.Tests.csproj", "{1901F0AB-EB9E-4313-90C7-8EB0EE28342E}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "OpcUaExporter.Web", "src\OpcUaExporter.Web\OpcUaExporter.Web.csproj", "{8F184EBB-52DA-4461-96EB-0BB9989C6A19}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,6 +34,10 @@ Global
 		{1901F0AB-EB9E-4313-90C7-8EB0EE28342E}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1901F0AB-EB9E-4313-90C7-8EB0EE28342E}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{1901F0AB-EB9E-4313-90C7-8EB0EE28342E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8F184EBB-52DA-4461-96EB-0BB9989C6A19}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8F184EBB-52DA-4461-96EB-0BB9989C6A19}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8F184EBB-52DA-4461-96EB-0BB9989C6A19}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8F184EBB-52DA-4461-96EB-0BB9989C6A19}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
