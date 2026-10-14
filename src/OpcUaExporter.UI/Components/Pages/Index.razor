@@ -431,6 +431,8 @@
                                    value="@_trendWindowSeconds" @onchange="OnTrendWindowChanged" />
                             s
                         </label>
+                        @* Text is filled in by trend-chart.js on every redraw (24-hour HH:MM:SS, the chart's right edge). *@
+                        <span class="chart-clock mono" title="Current time"></span>
                         <button class="btn btn-ghost" @onclick="ClearChart">✕ Clear Chart</button>
                     </div>
                     <div class="chart-body">

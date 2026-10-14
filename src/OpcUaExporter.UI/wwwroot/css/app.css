@@ -467,6 +467,14 @@ body.row-resizing * {
     row-gap: 8px;
 }
 
+/* 1.5x the 12px x-axis tick labels. */
+.chart-clock {
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
 .trend-window-control {
     display: inline-flex;
     align-items: center;
