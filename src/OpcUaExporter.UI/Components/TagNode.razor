@@ -47,7 +47,7 @@
             <span class="tag-type">@Tag.DataType</span>
             @if (Tag.Value != null)
             {
-                <span class="tag-value">@Tag.Value</span>
+                <span class="tag-value">@ValueFormatter.Format(Tag.Value)</span>
             }
         }
     </div>

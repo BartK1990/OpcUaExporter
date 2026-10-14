@@ -1,0 +1,40 @@
+name: CI
+
+# Builds and tests everything except the WPF shell (net8.0-windows) on Linux:
+# unit tests, then end-to-end UI tests that drive the browser host in headless
+# Chromium against the OPC UA simulation server.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Unit tests
+        run: dotnet test tests/OpcUaExporter.Tests -c Release
+
+      - name: Build end-to-end tests
+        run: dotnet build tests/OpcUaExporter.E2ETests -c Release
+
+      - name: Install Playwright Chromium
+        run: pwsh tests/OpcUaExporter.E2ETests/bin/Release/net8.0/playwright.ps1 install --with-deps chromium
+
+      - name: End-to-end tests
+        run: dotnet test tests/OpcUaExporter.E2ETests -c Release --no-build --logger "console;verbosity=normal"

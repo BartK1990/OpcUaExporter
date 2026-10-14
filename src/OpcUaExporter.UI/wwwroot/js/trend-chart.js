@@ -61,6 +61,16 @@
         return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
     }
 
+    // Mirrors the chart's right-edge time into the header clock. Looked up on each draw
+    // because Blazor re-creates the header whenever the chart panel is toggled.
+    function updateClock(ms) {
+        var panel = state.canvas && state.canvas.closest('.chart-panel');
+        var clock = panel && panel.querySelector('.chart-clock');
+        if (!clock) return;
+        var text = formatTime(ms);
+        if (clock.textContent !== text) clock.textContent = text;
+    }
+
     // Compact value text for the hover tooltip: integers as-is, otherwise up to 4 decimals.
     function formatValue(v) {
         if (v === null || v === undefined || !isFinite(v)) return '-';
@@ -125,6 +135,7 @@
         // plotted keeps its position until it scrolls off the left edge.
         var tMax = Math.floor(Date.now() / HEARTBEAT_MS) * HEARTBEAT_MS;
         var tMin = tMax - state.windowMs;
+        updateClock(tMax);
 
         var hasRightAxis = state.order.some(function (id) {
             var s = state.series[id];
