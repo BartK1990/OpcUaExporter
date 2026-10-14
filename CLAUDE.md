@@ -10,6 +10,10 @@ OPC UA communication uses the native **OPCFoundation UA-.NETStandard** SDK direc
 
 The solution has two hosts over the same UI — the shipped WPF desktop shell and a cross-platform browser host used for development and end-to-end tests — plus a simulation OPC UA server and two test projects, described under "Architecture" below.
 
+## Before starting work
+
+Always check that the working branch is on the latest `master` first: `git fetch origin master`, then compare (`git rev-list --left-right --count HEAD...origin/master`). If it is behind, bring `origin/master` in before making changes, and say so in your reply.
+
 ## Commands
 
 Build and run:

@@ -20,7 +20,8 @@
         resizeObserver: null,
         rafScheduled: false,
         tickInterval: null,
-        hover: null          // { x, y } in canvas pixels while the mouse is over the chart
+        hover: null,         // { x, y } in canvas pixels while the mouse is over the chart
+        shown: {}            // nodeId -> value at the right edge as of the last draw (see shownValue)
     };
 
     function colorFor(nodeId) {
@@ -347,6 +348,7 @@
         ctx.textAlign = 'left';
 
         var drawn = [];   // [{ id, label, color, pts, yFor }] for the hover readout
+        state.shown = {};
         state.order.forEach(function (id) {
             var s = state.series[id];
             if (!s) return;
@@ -367,6 +369,7 @@
             ctx.stroke();
 
             var last = pts[pts.length - 1];
+            state.shown[id] = last.v;
             ctx.fillStyle = colorFor(id);
             ctx.beginPath();
             ctx.arc(xFor(last.t), yFor(last.v), 2.5 * dpr, 0, Math.PI * 2);
@@ -520,20 +523,24 @@
             // in the real label/axis (and adopt these points) once it runs.
             var s = state.series[nodeId];
             if (!s) {
-                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left', lastCommitT: null };
+                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left' };
                 if (state.order.indexOf(nodeId) < 0) state.order.push(nodeId);
             }
 
-            // Some servers push data-change notifications faster than once a second no
-            // matter what sampling interval was requested. Drop those extra updates
-            // outright (rather than folding them into the pending point) so the chart's
-            // displayed value only ever changes once per second, not just its committed
-            // history — otherwise the last point would still visibly jitter in between.
-            if (s.lastCommitT !== null && (timestampMs - s.lastCommitT) < HEARTBEAT_MS) {
-                return;
+            // Some servers push data-change notifications faster than once a second, and
+            // several queued changes can arrive together in one publish. draw() resamples
+            // every series onto a one-point-per-second grid, taking the newest sample at or
+            // before each tick, so an update that resolves to the same grid tick as the
+            // previous sample simply replaces it. It must never be dropped: the newest value
+            // is what the readings table shows, and a tag that doesn't change again would
+            // otherwise be stuck on the stale value on the chart.
+            var last = s.points.length > 0 ? s.points[s.points.length - 1] : null;
+            if (last && Math.ceil(last.t / HEARTBEAT_MS) === Math.ceil(timestampMs / HEARTBEAT_MS)) {
+                last.t = timestampMs;
+                last.v = value;
+            } else {
+                s.points.push({ t: timestampMs, v: value });
             }
-            s.points.push({ t: timestampMs, v: value });
-            s.lastCommitT = timestampMs;
 
             // Keep a little more than one window of history: draw() needs the newest
             // sample at or before the window start to anchor the left edge, and its
@@ -572,6 +579,10 @@
             state.windowMs = ms;
             scheduleDraw();
         },
+
+        // The value each series is drawn at on the chart's right edge, as of the last
+        // repaint (undefined if not drawn). Read-only; lets tests compare chart and table.
+        shownValue: function (nodeId) { return state.shown[nodeId]; },
 
         resize: resizeCanvas,
 
