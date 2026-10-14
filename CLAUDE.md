@@ -36,9 +36,9 @@ dotnet run --project src/OpcUaExporter.Wpf
 Run the UI in a browser instead of WPF (any OS), optionally against the bundled simulation server:
 ```bash
 dotnet run --project tools/OpcUaExporter.SimServer      # opc.tcp://localhost:4840
-dotnet run --project src/OpcUaExporter.Web              # http://localhost:5080
+dotnet run --project src/OpcUaExporter.Web              # http://localhost:5081
 ```
-The browser host and the bridge's dashboard both default to port 5080, so they cannot run side by side unmodified; pass `--urls` to one of them. The simulation server's `opc.tcp://localhost:4840` is the bridge's default upstream endpoint, so `SimServer` + `OpcUaBridge.Host` is a complete gateway to try locally.
+The browser host is on 5081 so it can run beside the bridge's dashboard, which is on 5080. The simulation server's `opc.tcp://localhost:4840` is the bridge's default upstream endpoint, so `SimServer` + `OpcUaBridge.Host` is a complete gateway to try locally.
 
 Exporter tests (any OS — neither project references the WPF shell):
 ```bash

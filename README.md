@@ -478,11 +478,10 @@ The same UI can be hosted in a browser — handy for developing the UI on
 Linux/macOS and for testing:
 
 ```bash
-dotnet run --project src/OpcUaExporter.Web     # → http://localhost:5080
+dotnet run --project src/OpcUaExporter.Web     # → http://localhost:5081
 ```
 
-The gateway's dashboard also defaults to port 5080, so to run both at once start
-one of them with `--urls`, e.g. `-- --urls http://localhost:5081`.
+It uses port 5081 so it can run beside the gateway's dashboard, which is on 5080.
 
 It is a local, single-user development host, not a deployment target: all tabs
 share one connection (like the desktop window), and the save/open "dialogs" ask
