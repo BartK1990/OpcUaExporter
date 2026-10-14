@@ -29,6 +29,13 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         services.TryAddSingleton<DiagnosticsLogService>();
+
+        // The client lives in OpcUaShared, which cannot see AppPaths, so left to itself it
+        // recomputes %LocalAppData%\OpcUaExporter\pki. Handing it AppPaths' answer keeps one
+        // source of truth -- and is what makes OPCUAEXPORTER_DATA_DIR move the certificates
+        // along with everything else, rather than leaving a browser host or test run writing
+        // into the user's real desktop certificate store.
+        services.TryAddSingleton<IOpcUaPkiLocation>(_ => new OpcUaPkiLocation(AppPaths.PkiDirectory));
         services.TryAddSingleton<OpcUaClientService>();
         services.TryAddSingleton<OpcUaService>();
         services.TryAddSingleton<ThemeService>();

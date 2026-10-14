@@ -467,6 +467,15 @@ body.row-resizing * {
     row-gap: 8px;
 }
 
+/* 1.5x the 12px x-axis tick labels. */
+.chart-clock {
+    font-family: var(--font-mono);
+    font-size: 18px;
+    font-weight: bold;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
 .trend-window-control {
     display: inline-flex;
     align-items: center;
@@ -642,8 +651,15 @@ body.row-resizing * {
     padding: 3px 6px;
 }
 
+/* Fits all 19 characters of "YYYY-MM-DD HH:MM:SS" in the monospace font. */
 .write-input-datetime {
-    width: 170px;
+    width: calc(19ch + 14px);
+    flex-shrink: 0;
+}
+
+.write-input-invalid,
+.write-input-invalid:focus {
+    border-color: var(--red);
 }
 
 .write-type-select {

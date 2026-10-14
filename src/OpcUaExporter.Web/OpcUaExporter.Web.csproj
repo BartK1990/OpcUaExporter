@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <!--
+    Cross-platform browser host for the Blazor UI (Blazor Web App, interactive
+    server rendering). Renders the very same Routes component and pages from
+    OpcUaExporter.UI that the WPF shell shows in its BlazorWebView, so the UI can
+    be run, debugged and end-to-end tested in an ordinary browser on any OS.
+
+    This is a development/test host for a single local user: application
+    services are singletons, so every open tab shares one connection, exactly
+    like the desktop window.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>OpcUaExporter.Web</RootNamespace>
+    <AssemblyName>OpcUaExporter.Web</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\OpcUaExporter.UI\OpcUaExporter.UI.csproj" />
+  </ItemGroup>
+
+</Project>

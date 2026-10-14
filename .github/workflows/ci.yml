@@ -1,17 +1,26 @@
 name: CI
 
-# Guards the property the repository's layout depends on: everything except the WPF
-# shell builds and tests on Linux. Without this, a Windows-only dependency can creep
-# into shared code and nobody notices until a non-Windows session tries to build.
+# Builds and tests everything except the WPF shell (net8.0-windows) on Linux: the
+# exporter's and the bridge's unit tests, the bridge's integration tests, then end-to-end
+# UI tests that drive the exporter's browser host in headless Chromium against the OPC UA
+# simulation server.
+#
+# It also guards the property the repository's layout depends on. Without it, a
+# Windows-only dependency can creep into shared code and nobody notices until a
+# non-Windows session tries to build.
 on:
   push:
     branches: [master]
   pull_request:
-    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
 
     steps:
       - uses: actions/checkout@v4
@@ -21,7 +30,8 @@ jobs:
           dotnet-version: 8.0.x
 
       # The solution filter excludes src/OpcUaExporter.Wpf, which targets
-      # net8.0-windows and can never build here.
+      # net8.0-windows and can never build here. Every other project is in it, so a
+      # project added to the solution but not to the filter is never built by CI.
       - name: Restore
         run: dotnet restore OpcUaExporter.Linux.slnf
 
@@ -42,3 +52,11 @@ jobs:
         run: >
           dotnet test tests/OpcUaBridge.Tests/OpcUaBridge.Tests.csproj
           -c Release --no-build --filter "Category=Integration"
+
+      - name: Install Playwright Chromium
+        run: pwsh tests/OpcUaExporter.E2ETests/bin/Release/net8.0/playwright.ps1 install --with-deps chromium
+
+      - name: Test exporter (end-to-end UI)
+        run: >
+          dotnet test tests/OpcUaExporter.E2ETests/OpcUaExporter.E2ETests.csproj
+          -c Release --no-build --logger "console;verbosity=normal"

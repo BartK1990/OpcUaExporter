@@ -12,7 +12,10 @@ This repository holds **two applications** that share one OPC UA client library.
 
 OPC UA communication uses the native **OPCFoundation UA-.NETStandard** SDK directly from C# — there is no Python subprocess or embedded runtime. [README.md](README.md) is kept in sync with this architecture.
 
-The solution has seven projects (`src/` + `tests/`), described under "Architecture" below.
+The solution has ten projects, described under "Architecture" below: the exporter's two hosts over the same UI — the shipped WPF desktop shell and a cross-platform browser host used for development and end-to-end tests — the bridge's service host, the libraries behind them, a simulation OPC UA server, and three test projects.
+## Before starting work
+
+Always check that the working branch is on the latest `master` first: `git fetch origin master`, then compare (`git rev-list --left-right --count HEAD...origin/master`). If it is behind, bring `origin/master` in before making changes, and say so in your reply.
 
 ## Commands
 
@@ -28,6 +31,24 @@ Exporter (Windows only):
 ```bash
 dotnet build OpcUaExporter.sln
 dotnet run --project src/OpcUaExporter.Wpf
+```
+
+Run the UI in a browser instead of WPF (any OS), optionally against the bundled simulation server:
+```bash
+dotnet run --project tools/OpcUaExporter.SimServer      # opc.tcp://localhost:4840
+dotnet run --project src/OpcUaExporter.Web              # http://localhost:5080
+```
+The browser host and the bridge's dashboard both default to port 5080, so they cannot run side by side unmodified; pass `--urls` to one of them. The simulation server's `opc.tcp://localhost:4840` is the bridge's default upstream endpoint, so `SimServer` + `OpcUaBridge.Host` is a complete gateway to try locally.
+
+Exporter tests (any OS — neither project references the WPF shell):
+```bash
+dotnet test tests/OpcUaExporter.Tests       # unit tests
+dotnet test tests/OpcUaExporter.E2ETests    # Playwright/Chromium UI tests against the sim server
+```
+The E2E tests need a Playwright Chromium build (`PLAYWRIGHT_BROWSERS_PATH`, or `pwsh tests/OpcUaExporter.E2ETests/bin/Debug/net8.0/playwright.ps1 install chromium`; in cloud sessions it is preinstalled at `/opt/pw-browsers`).
+
+Publish (self-contained; always publish the WPF shell, never a library):
+```bash
 dotnet publish src/OpcUaExporter.Wpf -c Release -r win-x64 --self-contained true
 ```
 
@@ -40,7 +61,7 @@ dotnet publish src/OpcUaBridge.Host -c Release -r win-x64 --self-contained true
 
 ### What the tests do and don't cover
 
-The exporter's tests cover only platform-independent pieces (models, the diagnostics buffer, path layout, DI wiring). Anything touching a live OPC UA session or the WebView still has to be verified by running the app.
+The exporter's unit tests cover the platform-independent pieces (models, the diagnostics buffer, path layout, DI wiring). UI and live-session behaviour is covered by `tests/OpcUaExporter.E2ETests`, which start `OpcUaExporter.SimServer` and `OpcUaExporter.Web` in-process and drive the real pages in headless Chromium. When changing UI, add or extend an E2E test, and look at the result (Playwright screenshot) rather than assuming CSS/markup changes render as intended. Only the WPF shell itself is untested — keep it thin.
 
 The bridge's tests go further. Its **integration tests start a real OPC UA server in-process and connect a real client to it**, and they run on Linux — the OPC UA SDK is cross-platform. `EndToEndGatewayTests` stands up a second server as a stand-in plant server and drives browse → capture → resolve → subscribe → mirror against it. They are excluded from the default run because they are slow and generate certificates:
 
@@ -53,29 +74,33 @@ Prefer extending those over adding a fake when changing anything in the gateway'
 ## Architecture
 
 ```
-  Desktop exporter                        Headless gateway
-  ────────────────                        ────────────────
-src/OpcUaExporter.Wpf                   src/OpcUaBridge.Host
-  (net8.0-windows, WinExe                 (net8.0, Web SDK,
-   → OpcUaExporter.exe)                    → OpcUaBridge.exe)
-      │ references                              │ references
-src/OpcUaExporter.UI                    src/OpcUaBridge.Core
-  (net8.0, Razor class library)           (net8.0, class library)
-      │ references                              │
-src/OpcUaExporter.Core                          │
-  (net8.0, class library)                       │
-      │                                         │
-      └──────────────┬──────────────────────────┘
-                     ▼
-              src/OpcUaShared
-         (net8.0, OPC UA client primitives)
-                     │
-   OPCFoundation UA-.NETStandard → OPC UA server (network)
+  Desktop exporter                                         Headless gateway
+  ────────────────                                         ────────────────
+src/OpcUaExporter.Wpf          src/OpcUaExporter.Web      src/OpcUaBridge.Host
+  (net8.0-windows, WinExe        (net8.0, browser host      (net8.0, Web SDK,
+   → OpcUaExporter.exe)           for dev and E2E tests)     → OpcUaBridge.exe)
+      │                              │                           │ references
+      └──────────────┬───────────────┘                     src/OpcUaBridge.Core
+                     │ references                            (net8.0, class library)
+src/OpcUaExporter.UI                                             │
+  (net8.0, Razor class library)                                  │
+      │ references                                               │
+src/OpcUaExporter.Core                                           │
+  (net8.0, class library)                                        │
+      │                                                          │
+      └──────────────────────────┬───────────────────────────────┘
+                                 ▼
+                          src/OpcUaShared
+                     (net8.0, OPC UA client primitives)
+                                 │
+            OPCFoundation UA-.NETStandard → OPC UA server (network)
+
+  tools/OpcUaExporter.SimServer — a simulation OPC UA server for development and E2E tests; not shipped.
 ```
 
 Two rules keep this honest, and both are enforced by tests:
 
-- **`OpcUaExporter.Core` and `.UI` must never take a WPF or Windows-only dependency**, which is what keeps them buildable and testable off Windows. When the UI needs something only the host can do, declare an abstraction in `Core/Abstractions/` and implement it in the WPF project.
+- **`OpcUaExporter.Core` and `.UI` must never take a WPF or Windows-only dependency**, which is what keeps them buildable and testable off Windows. When the UI needs something only the host can do, declare an abstraction in `Core/Abstractions/` and implement it in both hosts (`OpcUaExporter.Wpf` and `OpcUaExporter.Web`).
 - **`OpcUaBridge.*` must never reference `OpcUaExporter.Core` or `.UI`.** They share the OPC UA client code, not the desktop application; letting the exporter in would drag CsvHelper, an Excel writer and a `%LocalAppData%` path layout into a Windows service that wants none of them. `ArchitectureTests` in `tests/OpcUaBridge.Tests` asserts this, along with `OpcUaBridge.Core` taking no ASP.NET Core dependency.
 
 ### OpcUaShared — the OPC UA client, shared by both applications
@@ -94,7 +119,7 @@ The operation primitives all **take a session the caller owns** rather than crea
 
 ### OpcUaExporter.Core — models and services
 
-- **AppPaths.cs** — the only place that knows about `%LocalAppData%\OpcUaExporter\`. Everything persisted (`pki\`, `crash.log`, `app-settings.json`, `last-profile.txt`) is addressed through it; add new persisted state here rather than recomputing the directory.
+- **AppPaths.cs** — the only place that knows about `%LocalAppData%\OpcUaExporter\` (overridable with the `OPCUAEXPORTER_DATA_DIR` environment variable, which the E2E tests use). Everything persisted (`pki\`, `crash.log`, `app-settings.json`, `last-profile.txt`) is addressed through it; add new persisted state here rather than recomputing the directory.
 - **ServiceCollectionExtensions.cs** — `AddOpcUaExporterCore()`, the single registration point for the services below. All singletons so Blazor components share state; uses `TryAdd*` so a host can pre-register its own implementation of an abstraction.
 - **Abstractions/IFileDialogService.cs** — native save/open/confirm/message dialogs. Blazor Hybrid has no browser file picker, so the shell supplies these. `NullFileDialogService` is the default and cancels every prompt (component tests, previews).
 - **`OpcUaClientService` now lives in `OpcUaShared`** (see above), not here, though its namespace and public surface are unchanged.
@@ -103,12 +128,24 @@ The operation primitives all **take a session the caller owns** rather than crea
 - **Services/ThemeService.cs** — light/dark theme flag persisted to `AppPaths.SettingsFile`.
 - **Models/ExportModels.cs** — `ExportOptions` and `ExportFormat`, which are the exporter's alone. The OPC UA domain models (`OpcTag`, `TagReading`, `ConnectionProfile`, `NodeDetails`, …) live in `OpcUaShared/Models/OpcModels.cs`, still in namespace `OpcUaExporter.Models`.
 
+### OpcUaExporter.Web — the browser host (dev/test)
+
+- **OpcUaExporterWebApp.cs** — builds the ASP.NET Core app (Blazor Web App, interactive server, prerendering off) that renders the same `Routes` component; `Program.cs` just runs it, and the E2E tests start it in-process on a free port. Static web assets are enabled in every environment so `_content/OpcUaExporter.UI/...` resolves from any entry assembly.
+- **Components/App.razor** — host page; the counterpart of the WPF `wwwroot/index.html`. **Keep their `<link>`/`<script>` lists in sync.**
+- **Services/BrowserFileDialogService.cs** — `IFileDialogService` over the browser's `prompt`/`confirm`/`alert`. Registered scoped (it needs the circuit's `IJSRuntime`); nothing singleton may depend on `IFileDialogService`.
+- Local, single-user host: services stay singletons, so all tabs share one connection like the desktop window. Not meant for deployment.
+
+### tools/OpcUaExporter.SimServer and tests/OpcUaExporter.E2ETests
+
+- **SimServer** — OPC UA server (`SimServerHost.StartAsync(port)`) with `Objects/Simulation/{Dynamic,Static,Deep}`: once-a-second changing values, writable tags of every type in the UI's write list (plus a `BaseDataType` one that needs the manual type override and a read-only one), and a 5-level branch. Extend it when a feature needs a node shape it doesn't have yet.
+- **E2ETests** — `E2EEnvironment` (collection fixture) owns the sim server, Chromium and an isolated `OPCUAEXPORTER_DATA_DIR`; `UiTestBase` gives each test a fresh web app + page and fails it on any page error or HTTP ≥ 400. Helpers: `BrowseSimServerAsync`, `ExpandAsync`, `SelectTagsAsync`, `TreeRow`, `SelectedRow`.
+
 ### OpcUaExporter.Wpf — the shell
 
 - **App.xaml.cs** — WPF entry point. Builds the DI container (registers `WpfFileDialogService` first, then calls `AddOpcUaExporterUi()`) and hooks global unhandled-exception handlers that log to `AppPaths.CrashLogFile`.
 - **MainWindow.xaml.cs** — hosts the `BlazorWebView` and assigns its `Services`. Deliberately thin; it has no `[JSInvokable]` methods.
 - **Services/WpfFileDialogService.cs** — `IFileDialogService` over `Microsoft.Win32` dialogs, marshalled onto the dispatcher (Win32 common dialogs need an STA thread).
-- **wwwroot/index.html** — the BlazorWebView host page. Its `<link>`/`<script>` tags point at `_content/OpcUaExporter.UI/...`, where the Razor SDK publishes the UI library's static assets. Keep it free of app logic.
+- **wwwroot/index.html** — the BlazorWebView host page (keep its asset list in sync with `OpcUaExporter.Web/Components/App.razor`). Its `<link>`/`<script>` tags point at `_content/OpcUaExporter.UI/...`, where the Razor SDK publishes the UI library's static assets. Keep it free of app logic.
 
 ### UI structure (src/OpcUaExporter.UI/Components/)
 
@@ -164,8 +201,8 @@ Namespace `OpcUaBridge`. No hosting or UI dependency, so all of it is testable o
 
 - Modern, non-deprecated APIs only for OPC UA certificate handling (per `.github/copilot-instructions.md`) — when working in `OpcUaShared`'s certificate/security code, prefer current OPCFoundation SDK APIs over older/obsolete overloads.
 - Services are DI singletons; new services that hold per-session state should follow the same pattern (register in `AddOpcUaExporterCore()`, inject into Razor pages with `@inject`) rather than introducing scoped/transient lifetimes that wouldn't fit the single-window app model. Only genuinely Windows-specific services are registered in `App.xaml.cs`.
-- **The exporter's** OPC UA client/PKI/log/settings state lives under `%LocalAppData%\OpcUaExporter\` — address it through `AppPaths`, never by recomputing the directory. The bridge keeps its own beside its executable (see below).
-- Anything the UI needs from the host goes through an abstraction in `OpcUaExporter.Core/Abstractions/`, implemented in `OpcUaExporter.Wpf/Services/`. Do not reintroduce static `[JSInvokable]` bridges: they hard-code the host assembly name and cannot be substituted in tests.
+- **The exporter's** OPC UA client/PKI/log/settings state lives under `%LocalAppData%\OpcUaExporter\` (or `OPCUAEXPORTER_DATA_DIR` when set) — address it through `AppPaths`, never by recomputing the directory. That includes the client's certificate store: `OpcUaClientService` lives in `OpcUaShared`, which cannot see `AppPaths`, so `AddOpcUaExporterCore()` hands it `AppPaths.PkiDirectory` as its `IOpcUaPkiLocation`. The bridge keeps its own state beside its executable (see below).
+- Anything the UI needs from the host goes through an abstraction in `OpcUaExporter.Core/Abstractions/`, implemented in **both** hosts: `OpcUaExporter.Wpf/Services/` and `OpcUaExporter.Web/Services/`. Do not reintroduce static `[JSInvokable]` bridges: they hard-code the host assembly name and cannot be substituted in tests.
 - The UI library's static assets are addressed as `_content/OpcUaExporter.UI/...` from the host page. Renaming the UI assembly changes that path.
 - **Shared code goes in `OpcUaShared`, and it takes the session as a parameter.** Anything that opens its own session cannot be reused by the gateway, which has exactly one and must keep it. If the exporter needs create-use-dispose semantics, that belongs in the `OpcUaClientService` façade, not in the primitive.
 - **The bridge keeps its state beside its executable**, addressed through `BridgePaths` — never `Directory.GetCurrentDirectory()`, which is the system directory when running as a service.

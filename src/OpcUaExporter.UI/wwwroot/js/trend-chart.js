@@ -20,7 +20,8 @@
         resizeObserver: null,
         rafScheduled: false,
         tickInterval: null,
-        hover: null          // { x, y } in canvas pixels while the mouse is over the chart
+        hover: null,         // { x, y } in canvas pixels while the mouse is over the chart
+        shown: {}            // nodeId -> value at the right edge as of the last draw (see shownValue)
     };
 
     function colorFor(nodeId) {
@@ -59,6 +60,16 @@
         var d = new Date(ms);
         function pad(n) { return (n < 10 ? '0' : '') + n; }
         return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }
+
+    // Mirrors the chart's right-edge time into the header clock. Looked up on each draw
+    // because Blazor re-creates the header whenever the chart panel is toggled.
+    function updateClock(ms) {
+        var panel = state.canvas && state.canvas.closest('.chart-panel');
+        var clock = panel && panel.querySelector('.chart-clock');
+        if (!clock) return;
+        var text = formatTime(ms);
+        if (clock.textContent !== text) clock.textContent = text;
     }
 
     // Compact value text for the hover tooltip: integers as-is, otherwise up to 4 decimals.
@@ -125,6 +136,7 @@
         // plotted keeps its position until it scrolls off the left edge.
         var tMax = Math.floor(Date.now() / HEARTBEAT_MS) * HEARTBEAT_MS;
         var tMin = tMax - state.windowMs;
+        updateClock(tMax);
 
         var hasRightAxis = state.order.some(function (id) {
             var s = state.series[id];
@@ -336,6 +348,7 @@
         ctx.textAlign = 'left';
 
         var drawn = [];   // [{ id, label, color, pts, yFor }] for the hover readout
+        state.shown = {};
         state.order.forEach(function (id) {
             var s = state.series[id];
             if (!s) return;
@@ -356,6 +369,7 @@
             ctx.stroke();
 
             var last = pts[pts.length - 1];
+            state.shown[id] = last.v;
             ctx.fillStyle = colorFor(id);
             ctx.beginPath();
             ctx.arc(xFor(last.t), yFor(last.v), 2.5 * dpr, 0, Math.PI * 2);
@@ -509,20 +523,24 @@
             // in the real label/axis (and adopt these points) once it runs.
             var s = state.series[nodeId];
             if (!s) {
-                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left', lastCommitT: null };
+                s = state.series[nodeId] = { points: [], label: nodeId, axis: 'left' };
                 if (state.order.indexOf(nodeId) < 0) state.order.push(nodeId);
             }
 
-            // Some servers push data-change notifications faster than once a second no
-            // matter what sampling interval was requested. Drop those extra updates
-            // outright (rather than folding them into the pending point) so the chart's
-            // displayed value only ever changes once per second, not just its committed
-            // history — otherwise the last point would still visibly jitter in between.
-            if (s.lastCommitT !== null && (timestampMs - s.lastCommitT) < HEARTBEAT_MS) {
-                return;
+            // Some servers push data-change notifications faster than once a second, and
+            // several queued changes can arrive together in one publish. draw() resamples
+            // every series onto a one-point-per-second grid, taking the newest sample at or
+            // before each tick, so an update that resolves to the same grid tick as the
+            // previous sample simply replaces it. It must never be dropped: the newest value
+            // is what the readings table shows, and a tag that doesn't change again would
+            // otherwise be stuck on the stale value on the chart.
+            var last = s.points.length > 0 ? s.points[s.points.length - 1] : null;
+            if (last && Math.ceil(last.t / HEARTBEAT_MS) === Math.ceil(timestampMs / HEARTBEAT_MS)) {
+                last.t = timestampMs;
+                last.v = value;
+            } else {
+                s.points.push({ t: timestampMs, v: value });
             }
-            s.points.push({ t: timestampMs, v: value });
-            s.lastCommitT = timestampMs;
 
             // Keep a little more than one window of history: draw() needs the newest
             // sample at or before the window start to anchor the left edge, and its
@@ -561,6 +579,10 @@
             state.windowMs = ms;
             scheduleDraw();
         },
+
+        // The value each series is drawn at on the chart's right edge, as of the last
+        // repaint (undefined if not drawn). Read-only; lets tests compare chart and table.
+        shownValue: function (nodeId) { return state.shown[nodeId]; },
 
         resize: resizeCanvas,
 

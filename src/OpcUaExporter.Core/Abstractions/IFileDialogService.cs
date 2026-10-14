@@ -5,7 +5,8 @@ namespace OpcUaExporter.Abstractions;
 /// <para>
 /// A Blazor Hybrid WebView has no browser file picker, so the shell hosting the
 /// UI supplies the platform implementation — <c>OpcUaExporter.Wpf</c> uses the
-/// WPF <see cref="Microsoft.Win32.FileDialog"/> family. Declaring the contract
+/// WPF <see cref="Microsoft.Win32.FileDialog"/> family, the browser host
+/// (<c>OpcUaExporter.Web</c>) the browser's prompt/confirm/alert. Declaring the contract
 /// here keeps the UI project free of any Windows dependency and lets tests
 /// substitute a stub.
 /// </para>

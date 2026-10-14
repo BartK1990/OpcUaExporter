@@ -1,0 +1,37 @@
+@*
+    Browser host page: the counterpart of the WPF shell's wwwroot/index.html.
+    Styles and scripts come from the OpcUaExporter.UI razor class library under
+    _content/OpcUaExporter.UI/. Keep the asset list in sync with index.html.
+
+    Prerendering is off: the pages start JS interop (trend chart, theme,
+    resizable panes) and subscribe to singleton state in OnInitialized, which
+    should run once per tab, as it does in the desktop WebView.
+*@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OPC UA Exporter</title>
+    <base href="/" />
+    <link rel="icon" href="_content/OpcUaExporter.UI/app.ico" />
+    <link href="_content/OpcUaExporter.UI/css/bootstrap-icons/bootstrap-icons.css" rel="stylesheet" />
+    <link href="_content/OpcUaExporter.UI/css/app.css" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Syne:wght@600;700&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <HeadOutlet @rendermode="RenderMode" />
+</head>
+<body>
+    <Routes @rendermode="RenderMode" />
+
+    <script src="_framework/blazor.web.js"></script>
+    <script src="_content/OpcUaExporter.UI/js/resizable-panes.js"></script>
+    <script src="_content/OpcUaExporter.UI/js/resizable-columns.js"></script>
+    <script src="_content/OpcUaExporter.UI/js/trend-chart.js"></script>
+    <script src="_content/OpcUaExporter.UI/js/theme.js"></script>
+</body>
+</html>
+
+@code {
+    private static readonly IComponentRenderMode RenderMode = new InteractiveServerRenderMode(prerender: false);
+}

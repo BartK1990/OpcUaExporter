@@ -31,6 +31,17 @@ public class ServiceRegistrationTests
     }
 
     [Fact]
+    public void AddOpcUaExporterCore_PointsTheClientsCertificatesAtAppPaths()
+    {
+        // OpcUaShared cannot see AppPaths and recomputes the default itself. Registering
+        // the location from AppPaths is what makes OPCUAEXPORTER_DATA_DIR move the
+        // certificate store along with the profiles and settings.
+        using var provider = BuildProvider(services => services.AddOpcUaExporterCore());
+
+        Assert.Equal(AppPaths.PkiDirectory, provider.GetRequiredService<IOpcUaPkiLocation>().PkiRoot);
+    }
+
+    [Fact]
     public void AddOpcUaExporterUi_AlsoRegistersTheCoreServices()
     {
         using var provider = BuildProvider(services => services.AddOpcUaExporterUi());

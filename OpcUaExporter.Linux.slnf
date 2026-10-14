@@ -5,9 +5,12 @@
       "src\\OpcUaShared\\OpcUaShared.csproj",
       "src\\OpcUaExporter.Core\\OpcUaExporter.Core.csproj",
       "src\\OpcUaExporter.UI\\OpcUaExporter.UI.csproj",
+      "src\\OpcUaExporter.Web\\OpcUaExporter.Web.csproj",
       "src\\OpcUaBridge.Core\\OpcUaBridge.Core.csproj",
       "src\\OpcUaBridge.Host\\OpcUaBridge.Host.csproj",
+      "tools\\OpcUaExporter.SimServer\\OpcUaExporter.SimServer.csproj",
       "tests\\OpcUaExporter.Tests\\OpcUaExporter.Tests.csproj",
+      "tests\\OpcUaExporter.E2ETests\\OpcUaExporter.E2ETests.csproj",
       "tests\\OpcUaBridge.Tests\\OpcUaBridge.Tests.csproj"
     ]
   }
