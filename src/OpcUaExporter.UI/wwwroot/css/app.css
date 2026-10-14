@@ -291,6 +291,15 @@ body {
     animation: spin .7s linear infinite;
 }
 
+.spinner-xs {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-width: 1.5px;
+    vertical-align: middle;
+}
+
+.subscribe-pending { margin-left: 4px; color: var(--text-muted); }
+
 /* ── Status bar ─────────────────────────────────────────── */
 .status-bar {
     margin-top: auto;
@@ -376,6 +385,8 @@ body.pane-resizing * {
 }
 
 .selected-actions { margin-bottom: 10px; }
+
+.selected-search-row { flex-wrap: nowrap; }
 
 /* ── Recording indicator ────────────────────────────────── */
 .recording-indicator {
@@ -499,7 +510,7 @@ body.row-resizing * {
 
 /* ── Trended tag list (collapsible side panel) ──────────── */
 .chart-legend-panel {
-    flex: 0 0 190px;
+    flex: 0 0 240px;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -565,6 +576,16 @@ body.row-resizing * {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.legend-value {
+    flex-shrink: 0;
+    max-width: 70px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-weight: 600;
 }
 
 .legend-note {
@@ -817,6 +838,7 @@ body.row-resizing * {
 }
 
 .chevron.expanded { transform: rotate(90deg); }
+.chevron:hover { color: var(--text-primary); }
 .chevron-spacer { width: 14px; display: inline-block; }
 
 .tag-check {

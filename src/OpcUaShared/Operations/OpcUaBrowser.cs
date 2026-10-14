@@ -40,58 +40,45 @@ public sealed class OpcUaBrowser(DiagnosticsLogService diagnostics)
     /// the caller owns.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// Taking the session as a parameter is what lets a long-lived gateway browse on
     /// its existing connection instead of opening a second one.
+    /// </para>
+    /// <para>
+    /// The tree is built top-down and published as it goes: <paramref name="onTopStructureReady"/>
+    /// receives the (live) top-level list as soon as it is known, and each node's children
+    /// appear via <see cref="OpcTag.PublishChildren"/> the moment they are fetched, so a UI can
+    /// show and explore the tree while the scan continues. Nodes whose children were already
+    /// fetched on demand (<see cref="FetchChildrenAsync"/>) are reused rather than fetched twice.
+    /// </para>
     /// </remarks>
+    /// <param name="dataTypeNames">
+    /// Shared with on-demand fetches of the same server. Null gives this browse its own,
+    /// which is right for a one-off capture.
+    /// </param>
     public async Task<List<OpcTag>> BrowseAsync(
         Session session,
         BrowseOptions options,
         Action<List<OpcTag>>? onTopStructureReady = null,
         Action<int>? onVariableCountChanged = null,
+        DataTypeNameCache? dataTypeNames = null,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(options);
+
+        dataTypeNames ??= new DataTypeNameCache();
 
         var rootNodeId = ObjectIds.ObjectsFolder;
         var progress = new BrowseProgressState();
         progress.TryVisitNode(rootNodeId.ToString());
 
         _diagnostics.Add("Browse started.");
-        var references = await session.FetchReferencesAsync(rootNodeId, ct: ct);
-        var topLevelChildren = references
-            .Where(r => r.IsForward && r.NodeClass is NodeClass.Object or NodeClass.Variable)
-            .Select(r => (Reference: r, NodeId: ExpandedNodeId.ToNodeId(r.NodeId, session.NamespaceUris)))
-            .Where(x => x.NodeId is not null)
-            .Select(x => (x.Reference, NodeId: x.NodeId!))
-            .ToList();
-
-        var variableDataTypes = await ReadVariableDataTypesAsync(session, topLevelChildren, ct);
-
-        var tags = new List<OpcTag>(topLevelChildren.Count);
-        foreach (var (reference, childNodeId) in topLevelChildren)
+        var tags = await FetchChildrenAsync(session, rootNodeId, dataTypeNames, ct);
+        foreach (var tag in tags)
         {
-            ct.ThrowIfCancellationRequested();
-
-            var tag = new OpcTag
-            {
-                NodeId = childNodeId.ToString(),
-                BrowseName = reference.BrowseName?.ToString() ?? string.Empty,
-                DisplayName = reference.DisplayName?.Text ?? childNodeId.ToString(),
-                NodeClass = reference.NodeClass.ToString()
-            };
-
-            if (reference.NodeClass == NodeClass.Variable &&
-                variableDataTypes.TryGetValue(tag.NodeId, out var dataTypeId) &&
-                dataTypeId is not null)
-            {
-                tag.DataType = await OpcUaDataTypes.GetDataTypeNameCachedAsync(dataTypeId, session, progress);
-            }
-
-            if (reference.NodeClass == NodeClass.Variable)
+            if (tag.IsSelectable)
                 progress.IncrementVariableCount();
-
-            tags.Add(tag);
         }
 
         onTopStructureReady?.Invoke(tags);
@@ -108,7 +95,7 @@ public sealed class OpcUaBrowser(DiagnosticsLogService diagnostics)
 
             await Parallel.ForEachAsync(tags, parallelOptions, async (tag, token) =>
             {
-                await BrowseTopLevelTagAsync(session, tag, progress, onVariableCountChanged, token);
+                await BrowseTopLevelTagAsync(session, tag, progress, dataTypeNames, onVariableCountChanged, token);
             });
         }
         else
@@ -116,7 +103,7 @@ public sealed class OpcUaBrowser(DiagnosticsLogService diagnostics)
             foreach (var tag in tags)
             {
                 ct.ThrowIfCancellationRequested();
-                await BrowseTopLevelTagAsync(session, tag, progress, onVariableCountChanged, ct);
+                await BrowseTopLevelTagAsync(session, tag, progress, dataTypeNames, onVariableCountChanged, ct);
             }
         }
 
@@ -124,13 +111,23 @@ public sealed class OpcUaBrowser(DiagnosticsLogService diagnostics)
         return tags;
     }
 
-    private async Task<List<OpcTag>> BrowseNodeRecursiveAsync(
+    /// <summary>
+    /// Fetches the Object/Variable children of one node as unpublished <see cref="OpcTag"/>s,
+    /// sorted by NodeId, with Variable data types resolved.
+    /// </summary>
+    /// <remarks>
+    /// One level only. This is what expanding a node on demand needs, and what the deep scan
+    /// is built from.
+    /// </remarks>
+    public async Task<List<OpcTag>> FetchChildrenAsync(
         Session session,
         NodeId nodeId,
-        BrowseProgressState progress,
-        Action<int>? onVariableCountChanged,
-        CancellationToken ct)
+        DataTypeNameCache dataTypeNames,
+        CancellationToken ct = default)
     {
+        ArgumentNullException.ThrowIfNull(session);
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(dataTypeNames);
         ct.ThrowIfCancellationRequested();
 
         var references = await session.FetchReferencesAsync(nodeId, ct: ct);
@@ -142,24 +139,15 @@ public sealed class OpcUaBrowser(DiagnosticsLogService diagnostics)
             .ToList();
 
         var variableDataTypes = await ReadVariableDataTypesAsync(session, forwardChildren, ct);
-        var children = new List<OpcTag>();
+        var children = new List<OpcTag>(forwardChildren.Count);
 
         foreach (var (reference, childNodeId) in forwardChildren)
         {
             ct.ThrowIfCancellationRequested();
 
-            var childNodeIdText = childNodeId.ToString();
-            var isFirstVisit = progress.TryVisitNode(childNodeIdText);
-
-            var scannedNodes = progress.IncrementScannedNodes();
-            if (scannedNodes % BrowseProgressLogInterval == 0)
-            {
-                _diagnostics.Add($"Browse in progress: scanned {scannedNodes} node(s). Latest node: {childNodeId}");
-            }
-
             var tag = new OpcTag
             {
-                NodeId = childNodeIdText,
+                NodeId = childNodeId.ToString(),
                 BrowseName = reference.BrowseName?.ToString() ?? string.Empty,
                 DisplayName = reference.DisplayName?.Text ?? childNodeId.ToString(),
                 NodeClass = reference.NodeClass.ToString()
@@ -169,58 +157,85 @@ public sealed class OpcUaBrowser(DiagnosticsLogService diagnostics)
                 variableDataTypes.TryGetValue(tag.NodeId, out var dataTypeId) &&
                 dataTypeId is not null)
             {
-                tag.DataType = await OpcUaDataTypes.GetDataTypeNameCachedAsync(dataTypeId, session, progress);
+                tag.DataType = await OpcUaDataTypes.GetDataTypeNameCachedAsync(dataTypeId, session, dataTypeNames);
             }
 
-            if (reference.NodeClass == NodeClass.Variable)
+            children.Add(tag);
+        }
+
+        children.Sort((a, b) => string.Compare(a.NodeId, b.NodeId, StringComparison.OrdinalIgnoreCase));
+        return children;
+    }
+
+    /// <summary>
+    /// Deep-scans the subtree under <paramref name="tag"/>: publishes its children (unless an
+    /// on-demand fetch already did), then recurses.
+    /// </summary>
+    /// <remarks>
+    /// A node reached a second time -- the address space is a graph, not a tree -- is left
+    /// unloaded instead of being scanned again, so it can still be expanded on demand. A node
+    /// whose children cannot be fetched is left unloaded too, so the user can retry; genuine
+    /// cancellation still propagates.
+    /// </remarks>
+    private async Task BrowseSubtreeAsync(
+        Session session,
+        OpcTag tag,
+        BrowseProgressState progress,
+        DataTypeNameCache dataTypeNames,
+        Action<int>? onVariableCountChanged,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+
+        List<OpcTag> children;
+        if (tag.ChildrenLoaded)
+        {
+            children = tag.Children;
+        }
+        else
+        {
+            try
+            {
+                children = tag.PublishChildren(await FetchChildrenAsync(session, NodeId.Parse(tag.NodeId), dataTypeNames, ct));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                return;
+            }
+        }
+
+        foreach (var child in children)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var scannedNodes = progress.IncrementScannedNodes();
+            if (scannedNodes % BrowseProgressLogInterval == 0)
+                _diagnostics.Add($"Browse in progress: scanned {scannedNodes} node(s). Latest node: {child.NodeId}");
+
+            if (child.IsSelectable)
             {
                 var variableCount = progress.IncrementVariableCount();
                 if (variableCount % BrowseVariableProgressReportInterval == 0)
                     onVariableCountChanged?.Invoke(variableCount);
             }
 
-            if (isFirstVisit && reference.NodeClass is NodeClass.Object or NodeClass.Variable)
-            {
-                try
-                {
-                    var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, onVariableCountChanged, ct);
-                    tag.Children = nested;
-                }
-                catch
-                {
-                    tag.Children = [];
-                }
-            }
-
-            children.Add(tag);
+            if (progress.TryVisitNode(child.NodeId))
+                await BrowseSubtreeAsync(session, child, progress, dataTypeNames, onVariableCountChanged, ct);
         }
-
-        return children;
     }
 
     private async Task BrowseTopLevelTagAsync(
         Session session,
         OpcTag tag,
         BrowseProgressState progress,
+        DataTypeNameCache dataTypeNames,
         Action<int>? onVariableCountChanged,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
 
-        var childNodeId = NodeId.Parse(tag.NodeId);
-        var isFirstVisit = progress.TryVisitNode(tag.NodeId);
-        if (isFirstVisit && (tag.NodeClass == NodeClass.Object.ToString() || tag.NodeClass == NodeClass.Variable.ToString()))
-        {
-            try
-            {
-                var nested = await BrowseNodeRecursiveAsync(session, childNodeId, progress, onVariableCountChanged, ct);
-                tag.Children = nested;
-            }
-            catch
-            {
-                tag.Children = [];
-            }
-        }
+        if (progress.TryVisitNode(tag.NodeId))
+            await BrowseSubtreeAsync(session, tag, progress, dataTypeNames, onVariableCountChanged, ct);
 
         onVariableCountChanged?.Invoke(progress.VariableCount);
     }

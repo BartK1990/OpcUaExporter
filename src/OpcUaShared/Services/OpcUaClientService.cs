@@ -44,6 +44,14 @@ public class OpcUaClientService
     private readonly OpcUaSubscriber _subscriber;
     private readonly OpcUaServerScanner _scanner;
 
+    // Shared by the deep scan and on-demand expands; cleared whenever a server is browsed afresh.
+    private readonly DataTypeNameCache _dataTypeNames = new();
+
+    // Long-lived session for on-demand tree expansion (see BrowseChildrenAsync).
+    private readonly SemaphoreSlim _interactiveSessionLock = new(1, 1);
+    private Opc.Ua.Client.Session? _interactiveSession;
+    private string? _interactiveSessionKey;
+
     /// <summary>Ports commonly used by OPC UA servers, checked before the rest of the range.</summary>
     public static IReadOnlyList<int> WellKnownOpcUaPorts => OpcUaServerScanner.WellKnownOpcUaPorts;
 
@@ -86,6 +94,13 @@ public class OpcUaClientService
         _scanner = new OpcUaServerScanner(configurationAccessor, _diagnostics);
     }
 
+    /// <summary>
+    /// Browses the whole address space under the Objects folder. The tree is built top-down and published
+    /// as it goes: <paramref name="onTopStructureReady"/> receives the (live) top-level list as soon as it is
+    /// known, and each node's children appear via <see cref="OpcTag.PublishChildren"/> the moment they are
+    /// fetched, so the UI can show and explore the tree while the deep scan continues. Nodes the user already
+    /// expanded on demand (<see cref="BrowseChildrenAsync"/>) are reused rather than fetched twice.
+    /// </summary>
     public async Task<List<OpcTag>> BrowseAsync(
         ConnectionProfile profile,
         Action<List<OpcTag>>? onTopStructureReady = null,
@@ -93,7 +108,63 @@ public class OpcUaClientService
         CancellationToken ct = default)
     {
         using var session = await _sessions.CreateAsync(profile, ct: ct);
-        return await _browser.BrowseAsync(session, BrowseOptions.From(profile), onTopStructureReady, onVariableCountChanged, ct);
+
+        _dataTypeNames.Clear();
+        return await _browser.BrowseAsync(
+            session, BrowseOptions.From(profile), onTopStructureReady, onVariableCountChanged, _dataTypeNames, ct);
+    }
+
+    /// <summary>
+    /// Fetches one level of children of <paramref name="nodeId"/> (not yet published to any tree node), for
+    /// expanding a node on demand. Uses a long-lived interactive session so repeated expands don't each pay
+    /// for endpoint discovery and session activation, and so they don't queue behind the background deep scan.
+    /// </summary>
+    public async Task<List<OpcTag>> BrowseChildrenAsync(ConnectionProfile profile, string nodeId, CancellationToken ct = default)
+    {
+        var session = await GetInteractiveSessionAsync(profile, ct);
+        return await _browser.FetchChildrenAsync(session, NodeId.Parse(nodeId), _dataTypeNames, ct);
+    }
+
+    /// <summary>Closes the interactive session used by <see cref="BrowseChildrenAsync"/>, e.g. before browsing a (possibly different) server afresh.</summary>
+    public async Task ResetInteractiveSessionAsync()
+    {
+        await _interactiveSessionLock.WaitAsync();
+        try
+        {
+            _interactiveSession?.Dispose();
+            _interactiveSession = null;
+            _interactiveSessionKey = null;
+            _dataTypeNames.Clear();
+        }
+        finally
+        {
+            _interactiveSessionLock.Release();
+        }
+    }
+
+    private async Task<Opc.Ua.Client.Session> GetInteractiveSessionAsync(ConnectionProfile profile, CancellationToken ct)
+    {
+        var key = string.Join('|', profile.EndpointUrl, profile.SecurityMode, profile.SecurityPolicy,
+            profile.AuthenticationType, profile.Username, profile.Password);
+
+        await _interactiveSessionLock.WaitAsync(ct);
+        try
+        {
+            if (_interactiveSession is { Connected: true } existing && _interactiveSessionKey == key)
+                return existing;
+
+            _interactiveSession?.Dispose();
+            _interactiveSession = null;
+
+            var session = await _sessions.CreateAsync(profile, ct: ct);
+            _interactiveSession = session;
+            _interactiveSessionKey = key;
+            return session;
+        }
+        finally
+        {
+            _interactiveSessionLock.Release();
+        }
     }
 
     public async Task<List<TagReading>> ReadAsync(ConnectionProfile profile, IEnumerable<string> nodeIds, CancellationToken ct = default)
@@ -118,7 +189,12 @@ public class OpcUaClientService
         _diagnostics.Add("Connection test completed successfully.");
     }
 
-    public async Task<(IAsyncDisposable Handle, List<TagReading> InitialReadings)> SubscribeAsync(
+    /// <summary>
+    /// Opens a dedicated session with one subscription monitoring <paramref name="nodeIds"/>. The returned
+    /// handle can later add/remove monitored items in place (<see cref="ILiveSubscription.UpdateAsync"/>),
+    /// which is far cheaper than tearing the session down and building a new one for every change.
+    /// </summary>
+    public async Task<(ILiveSubscription Handle, List<TagReading> InitialReadings)> SubscribeAsync(
         ConnectionProfile profile,
         IEnumerable<string> nodeIds,
         Action<TagReading> onUpdate,

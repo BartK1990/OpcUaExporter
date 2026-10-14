@@ -21,9 +21,21 @@ public class OpcUaService
     private readonly DiagnosticsLogService _diagnostics;
     private CancellationTokenSource? _browseCancellation;
     private CancellationTokenSource? _scanCancellation;
+    private CancellationTokenSource _treeCancellation = new();
     private readonly object _subscriptionSync = new();
-    private IAsyncDisposable? _activeSubscription;
-    private CancellationTokenSource? _subscriptionCts;
+    private ILiveSubscription? _activeSubscription;
+
+    // Desired subscription state. UI actions only change this set (instantly) and a background sync loop
+    // reconciles the live subscription to it, so ticking checkboxes never waits on the server.
+    private static readonly TimeSpan SubscriptionSyncDebounce = TimeSpan.FromMilliseconds(150);
+    private readonly object _syncGate = new();
+    private HashSet<string> _desiredNodeIds = new(StringComparer.OrdinalIgnoreCase);
+    private int _desiredVersion;
+    private int _appliedVersion;
+    private bool _syncLoopRunning;
+    private bool _syncDebouncing;
+    private CancellationTokenSource? _syncCts;
+    private TaskCompletionSource _syncIdle = CompletedSyncIdle();
 
     public event Action? StateChanged;
 
@@ -62,6 +74,9 @@ public class OpcUaService
     public bool   IsBusy       { get; private set; }
     public bool   IsBrowsing   { get; private set; }
     public bool   IsSubscribed { get; private set; }
+
+    /// <summary>True while the live subscription is being brought in line with the requested tags.</summary>
+    public bool   IsSubscriptionPending { get; private set; }
     public string StatusMessage { get; private set; } = "Ready";
     public bool   HasError      { get; private set; }
 
@@ -70,13 +85,27 @@ public class OpcUaService
     public IReadOnlySet<string> SubscribedNodeIds => _subscribedNodeIds;
     private Dictionary<string, string> _displayNameByNodeId = new(StringComparer.OrdinalIgnoreCase);
 
-    // CSV recording (column-per-tag: one row per live update, latest known value/quality per tag)
+    // CSV recording (column-per-tag: one row per sampling interval, latest known value/quality per tag)
+    public const int DefaultRecordingIntervalSeconds = 1;
+    public const int MaxRecordingIntervalSeconds = 600;
+    private int _recordingIntervalSeconds = DefaultRecordingIntervalSeconds;
+    private int _activeRecordingIntervalSeconds = DefaultRecordingIntervalSeconds;
+    private DateTime? _lastRecordedSlotUtc;
+    private CancellationTokenSource? _recordingCts;
     private StreamWriter? _recordingWriter;
     private List<string> _recordingNodeIds = new();
+    private HashSet<string> _recordingNodeIdSet = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, TagReading> _recordingLatestByNodeId = new(StringComparer.OrdinalIgnoreCase);
     public bool   IsRecording       { get; private set; }
     public string? RecordingFilePath { get; private set; }
     public int    RecordedRowCount  { get; private set; }
+
+    /// <summary>Seconds between CSV recording rows. Applies to the next recording started; clamped to 1..<see cref="MaxRecordingIntervalSeconds"/>.</summary>
+    public int RecordingIntervalSeconds
+    {
+        get => _recordingIntervalSeconds;
+        set => _recordingIntervalSeconds = Math.Clamp(value, 1, MaxRecordingIntervalSeconds);
+    }
 
     // Live trend chart (subset of subscribed tags plotted on the chart)
     private readonly List<string> _trendedNodeIds = new();
@@ -128,54 +157,116 @@ public class OpcUaService
         return true;
     }
 
+    /// <summary>
+    /// Browses the whole address space in the background. The tree is published as soon as its top level is
+    /// known and keeps filling in while the deep scan runs; meanwhile the user can expand any node to fetch
+    /// its children on demand (<see cref="LoadChildrenAsync"/>). Deliberately not wrapped in <see cref="RunSafe"/>:
+    /// browsing must not set <see cref="IsBusy"/>, which would lock the rest of the UI for the whole scan.
+    /// </summary>
     public async Task BrowseAsync(CancellationToken ct = default)
     {
-        await StopSubscriptionAsync();
+        if (IsBrowsing)
+            return;
+
+        StopSubscription();
+
+        // Anything still expanding a node of the old tree is moot now.
+        _treeCancellation.Cancel();
+        _treeCancellation.Dispose();
+        _treeCancellation = new CancellationTokenSource();
 
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         _browseCancellation = linkedCts;
         IsBrowsing = true;
-        Notify();
+        BrowsedVariableCount = 0;
+        TagTree = [];
+        LastReadings = [];
+        SetStatus("Connecting and browsing tags…");
 
         try
         {
-            await RunSafe(async () =>
-            {
-                SetStatus("Connecting and browsing tags…");
-                BrowsedVariableCount = 0;
-                TagTree = [];
-                Notify();
+            await _client.ResetInteractiveSessionAsync();
 
-                TagTree = await _client.BrowseAsync(
-                    Profile,
-                    onTopStructureReady: topTags =>
-                    {
-                        TagTree = topTags;
-                        var browseMode = Profile.EnableParallelBrowse
-                            ? $"parallel (max {Math.Clamp(Profile.ParallelBrowseMaxDegree, 1, 32)})"
-                            : "sequential";
-                        SetStatus($"Top structure loaded ({topTags.Count} node(s)). Continuing deep scan ({browseMode})…");
-                    },
-                    onVariableCountChanged: variableCount =>
-                    {
-                        BrowsedVariableCount = variableCount;
-                        SetStatus($"Browsing tags… {BrowsedVariableCount} variable tag(s) found");
-                    },
-                    ct: linkedCts.Token);
+            TagTree = await _client.BrowseAsync(
+                Profile,
+                onTopStructureReady: topTags =>
+                {
+                    TagTree = topTags;
+                    IsConnected = true;
+                    var browseMode = Profile.EnableParallelBrowse
+                        ? $"parallel (max {Math.Clamp(Profile.ParallelBrowseMaxDegree, 1, 32)})"
+                        : "sequential";
+                    SetStatus($"Top structure loaded ({topTags.Count} node(s)). Continuing deep scan ({browseMode}) — expand any node to load it now…");
+                },
+                onVariableCountChanged: variableCount =>
+                {
+                    BrowsedVariableCount = variableCount;
+                    SetStatus($"Browsing tags… {BrowsedVariableCount} variable tag(s) found");
+                },
+                ct: linkedCts.Token);
 
-                RefreshPendingCertificates();
-                SortTreeByNodeId(TagTree);
-                IsConnected  = true;
-                LastReadings = [];
-                BrowsedVariableCount = FlatCount(TagTree);
-                SetStatus($"Browsed {BrowsedVariableCount} variable tags.");
-            }, "Browse canceled.");
+            RefreshPendingCertificates();
+            IsConnected  = true;
+            BrowsedVariableCount = FlatCount(TagTree);
+            SetStatus($"Browsed {BrowsedVariableCount} variable tags.");
+        }
+        catch (OperationCanceledException)
+        {
+            BrowsedVariableCount = FlatCount(TagTree);
+            SetStatus(TagTree.Count > 0
+                ? "Browse canceled. Nodes not scanned yet load when you expand them."
+                : "Browse canceled.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "OPC UA browse failed");
+            RefreshPendingCertificates();
+            SetStatus($"Error: {ex.Message}", isError: true);
         }
         finally
         {
             IsBrowsing = false;
             if (ReferenceEquals(_browseCancellation, linkedCts))
                 _browseCancellation = null;
+            Notify();
+        }
+    }
+
+    /// <summary>
+    /// Fetches a node's children from the server right now, independently of (and without waiting for) the
+    /// background deep scan. Whichever of the two gets there first publishes the child list; the other reuses it.
+    /// </summary>
+    public async Task LoadChildrenAsync(OpcTag tag)
+    {
+        var target = ResolveInTree([tag])[0];
+        if (!target.CanLoadChildren || target.IsLoadingChildren)
+            return;
+
+        var ct = _treeCancellation.Token;
+        target.IsLoadingChildren = true;
+        Notify();
+
+        try
+        {
+            var children = await _client.BrowseChildrenAsync(Profile, target.NodeId, ct);
+            target.PublishChildren(children);
+            IsConnected = true;
+            if (!IsBrowsing)
+                BrowsedVariableCount = FlatCount(TagTree);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // A new browse replaced the tree this node belonged to.
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to browse children of {NodeId}", target.NodeId);
+            RefreshPendingCertificates();
+            SetStatus($"Could not load children of '{target.DisplayName}': {ex.Message}", isError: true);
+        }
+        finally
+        {
+            target.IsLoadingChildren = false;
             Notify();
         }
     }
@@ -298,96 +389,287 @@ public class OpcUaService
         });
     }
 
-    /// <summary>Marks every selected tag as enabled for subscription and (re)subscribes to all of them.</summary>
-    public async Task SubscribeSelectedAsync(CancellationToken ct = default)
+    /// <summary>Whether the user asked for this tag to be subscribed (it may still be pending, see <see cref="IsSubscriptionPending"/>).</summary>
+    public bool IsSubscriptionRequested(string nodeId) => _desiredNodeIds.Contains(nodeId);
+
+    /// <summary>Queues a subscription to every selected tag (on top of whatever is already subscribed). Returns immediately.</summary>
+    public void SubscribeSelected()
     {
-        var selectedTags = GetSelectedTags();
-        if (!selectedTags.Any())
+        var selected = GetSelectedNodeIds();
+        if (!selected.Any())
         {
             SetStatus("No tags selected.", isError: true);
             return;
         }
 
-        foreach (var tag in selectedTags)
-            tag.IsSubscribeEnabled = true;
-
-        // Union in any tags already on the live trend chart so this doesn't silently drop
-        // them from the subscription — trending relies on the subscription for its data.
-        var selected = selectedTags.Select(t => t.NodeId)
-            .Concat(_trendedNodeIds)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        await RunSafe(async () =>
-        {
-            var recordingStopped = await SubscribeToAsync(selected, ct);
-            SetStatus(recordingStopped
-                ? $"Subscribed to {selected.Count} tag(s). Recording stopped because the subscribed tags changed — start a new recording to include the updated set."
-                : $"Subscribed to {selected.Count} tag(s). Listening for updates…");
-        });
+        ChangeDesiredSubscription(set => set.UnionWith(selected));
     }
 
-    /// <summary>Toggles whether a tag is included in the subscription, immediately starting/updating/stopping the live subscription to match.</summary>
-    public async Task ToggleTagSubscribeAsync(OpcTag tag, CancellationToken ct = default)
+    /// <summary>Queues adding/removing one tag to/from the live subscription. Returns immediately. Unsubscribing
+    /// a trended tag also takes it off the trend chart, which has no data without the subscription.</summary>
+    public void ToggleTagSubscribe(OpcTag tag)
     {
         if (!tag.IsSelectable)
             return;
 
-        tag.IsSubscribeEnabled = !tag.IsSubscribeEnabled;
-
-        await RunSafe(async () =>
+        var nodeId = tag.NodeId;
+        if (IsSubscriptionRequested(nodeId))
         {
-            // Union in any tags already on the live trend chart so unchecking an unrelated
-            // tag doesn't silently drop a trended one from the subscription — trending
-            // relies on the subscription for its data.
-            var desired = GetSubscribeEnabledNodeIds()
-                .Concat(_trendedNodeIds)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            if (desired.Count == 0)
-            {
-                if (IsSubscribed)
-                {
-                    var wasRecording = IsRecording;
-                    await StopSubscriptionInternalAsync();
-                    SetStatus(wasRecording
-                        ? "Subscription stopped (no tags enabled for subscription). Recording stopped as well — start a new recording when ready."
-                        : "Subscription stopped (no tags enabled for subscription).");
-                }
+            RemoveTrendEntries([nodeId]);
+            ChangeDesiredSubscription(set => set.Remove(nodeId));
+        }
+        else
+        {
+            ChangeDesiredSubscription(set => set.Add(nodeId));
+        }
+    }
+
+    /// <summary>Deselects every tag, which also drops them from the subscription (and the recording/trend that ride on it).</summary>
+    public void ClearSelection() => SelectAll(false);
+
+    /// <summary>Queues a full stop of the live subscription (and the recording/trend that ride on it). Returns immediately.</summary>
+    public void StopSubscription()
+    {
+        ClearTrend();
+        ChangeDesiredSubscription(set => set.Clear());
+    }
+
+    /// <summary>Waits until the live subscription matches the requested tags (or the attempt failed).</summary>
+    public Task WaitForSubscriptionSyncAsync(CancellationToken ct = default)
+    {
+        lock (_syncGate)
+            return _syncIdle.Task.WaitAsync(ct);
+    }
+
+    /// <summary>
+    /// Replaces the requested tag set and makes sure the sync loop is running. The newest request always wins:
+    /// a sync still in its debounce window restarts with it, and any in-flight work is canceled when nothing
+    /// should be subscribed anymore. Otherwise in-flight work is left to finish — restarting a session that is
+    /// still connecting on every click would mean it never finishes while the user keeps ticking boxes, and
+    /// interrupting an add/remove of monitored items mid-flight could leave the server's items out of step —
+    /// and the loop then goes round again for the newer target.
+    /// </summary>
+    private void ChangeDesiredSubscription(Action<HashSet<string>> change)
+    {
+        var startLoop = false;
+        lock (_syncGate)
+        {
+            var next = new HashSet<string>(_desiredNodeIds, StringComparer.OrdinalIgnoreCase);
+            change(next);
+            if (next.SetEquals(_desiredNodeIds))
                 return;
-            }
 
-            var desiredSet = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
-            if (!IsSubscribed || !desiredSet.SetEquals(_subscribedNodeIds))
+            // Swapped, never mutated, so the renderer can read it without locking.
+            _desiredNodeIds = next;
+            _desiredVersion++;
+            IsSubscriptionPending = true;
+
+            if (_syncDebouncing || next.Count == 0)
+                _syncCts?.Cancel();
+
+            if (!_syncLoopRunning)
             {
-                var recordingStopped = await SubscribeToAsync(desired, ct);
-                SetStatus(recordingStopped
-                    ? $"Subscribed to {desired.Count} tag(s). Recording stopped because the subscribed tags changed — start a new recording to include the updated set."
-                    : $"Subscribed to {desired.Count} tag(s). Listening for updates…");
+                _syncLoopRunning = true;
+                _syncIdle = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                startLoop = true;
             }
-        });
+        }
+
+        // Not Task.Run: the loop's continuations resume on the caller's (Blazor renderer) context, so the
+        // state it updates is never mutated underneath a render. Every wait inside it is asynchronous.
+        if (startLoop)
+            _ = RunSubscriptionSyncLoopAsync();
+
+        Notify();
     }
 
-    /// <summary>Deselects every tag and stops any active subscription (and the recording/trend that ride on it).</summary>
-    public async Task ClearSelectionAsync()
+    private async Task RunSubscriptionSyncLoopAsync()
     {
-        foreach (var tag in GetSelectedTags())
-            tag.IsSubscribeEnabled = false;
-
-        SelectAll(false);
-
-        if (IsSubscribed)
-            await StopSubscriptionAsync();
-    }
-
-    public async Task StopSubscriptionAsync()
-    {
-        await RunSafe(async () =>
+        while (true)
         {
-            var stopped = await StopSubscriptionInternalAsync();
-            if (stopped)
-                SetStatus("Subscription stopped.");
-        });
+            int version;
+            List<string> desired;
+            CancellationTokenSource cts;
+
+            lock (_syncGate)
+            {
+                if (_appliedVersion == _desiredVersion)
+                {
+                    _syncLoopRunning = false;
+                    IsSubscriptionPending = false;
+                    _syncIdle.TrySetResult();
+                    break;
+                }
+
+                version = _desiredVersion;
+                desired = _desiredNodeIds.ToList();
+                _syncCts = cts = new CancellationTokenSource();
+                _syncDebouncing = true;
+            }
+
+            try
+            {
+                // Coalesce a burst of clicks into one server round trip.
+                await Task.Delay(SubscriptionSyncDebounce, cts.Token);
+
+                lock (_syncGate)
+                {
+                    if (version != _desiredVersion)
+                        continue;
+                    _syncDebouncing = false;
+                }
+
+                await ApplyDesiredSubscriptionAsync(desired, cts.Token);
+
+                lock (_syncGate)
+                    _appliedVersion = version;
+            }
+            catch (OperationCanceledException) when (cts.IsCancellationRequested)
+            {
+                // Superseded by a newer request: go round again with the latest target.
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Updating the OPC UA subscription failed");
+                SetStatus($"Subscription update failed: {ex.Message}", isError: true);
+
+                lock (_syncGate)
+                {
+                    _appliedVersion = version;
+
+                    // Don't retry forever. Unless the user has already asked for something newer, fall back to
+                    // showing what is actually subscribed so no checkbox claims a subscription that isn't there.
+                    if (version == _desiredVersion)
+                        _desiredNodeIds = new HashSet<string>(_subscribedNodeIds, StringComparer.OrdinalIgnoreCase);
+                }
+
+                RemoveTrendEntries(_trendedNodeIds.Where(id => !_desiredNodeIds.Contains(id)).ToList());
+                if (IsRecording && !_recordingNodeIds.All(_subscribedNodeIds.Contains))
+                    StopRecordingInternal("Recording stopped: the live subscription could not be kept up.");
+            }
+            finally
+            {
+                lock (_syncGate)
+                {
+                    if (ReferenceEquals(_syncCts, cts))
+                        _syncCts = null;
+                    _syncDebouncing = false;
+                }
+                cts.Dispose();
+            }
+        }
+
+        Notify();
+    }
+
+    /// <summary>Brings the live subscription to exactly <paramref name="desired"/>: opens it, updates its monitored items in place, or stops it.</summary>
+    private async Task ApplyDesiredSubscriptionAsync(List<string> desired, CancellationToken ct)
+    {
+        if (desired.Count == 0)
+        {
+            var wasRecording = IsRecording;
+            if (await StopSubscriptionInternalAsync())
+            {
+                SetStatus(wasRecording
+                    ? "Subscription stopped. Recording stopped as well — start a new recording when ready."
+                    : "Subscription stopped.");
+            }
+            return;
+        }
+
+        List<TagReading> initialReadings;
+        ILiveSubscription? active;
+        lock (_subscriptionSync)
+            active = _activeSubscription;
+
+        if (active is not null)
+        {
+            try
+            {
+                initialReadings = await active.UpdateAsync(desired, ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // Most likely the subscription's session has dropped: rebuild it from scratch below.
+                _diagnostics.Add($"Updating the live subscription failed ({ex.Message}); reconnecting.");
+                await StopActiveSubscriptionHandleAsync();
+                active = null;
+                initialReadings = [];
+            }
+        }
+        else
+        {
+            initialReadings = [];
+        }
+
+        if (active is null)
+        {
+            SetStatus($"Subscribing to {desired.Count} tag(s)…");
+            var (handle, readings) = await _client.SubscribeAsync(Profile, desired, ApplySubscriptionUpdate, ct);
+            lock (_subscriptionSync)
+            {
+                _activeSubscription = handle;
+                IsSubscribed = true;
+            }
+            initialReadings = readings;
+        }
+
+        var subscribed = new HashSet<string>(desired, StringComparer.OrdinalIgnoreCase);
+        _subscribedNodeIds = subscribed;
+        _displayNameByNodeId = BuildDisplayNameMap();
+        MergeInitialReadings(subscribed, initialReadings);
+
+        var recordingStopped = false;
+        if (IsRecording && !_recordingNodeIds.All(subscribed.Contains))
+        {
+            StopRecordingInternal("Recording stopped: the subscribed tags changed and no longer cover every recorded tag.");
+            recordingStopped = true;
+        }
+
+        RemoveTrendEntries(_trendedNodeIds.Where(id => !subscribed.Contains(id)).ToList());
+
+        // Monitored-item creation normally delivers a first value, but seed the chart from the initial read too
+        // so a constant tag gets a point even if that notification raced ahead of the chart's series.
+        foreach (var reading in initialReadings)
+        {
+            if (_trendedNodeIds.Contains(reading.NodeId, StringComparer.OrdinalIgnoreCase))
+                TrendUpdate?.Invoke(reading);
+        }
+
+        SetStatus(recordingStopped
+            ? $"Subscribed to {subscribed.Count} tag(s). Recording stopped because the subscribed tags changed — start a new recording to include the updated set."
+            : $"Subscribed to {subscribed.Count} tag(s). Listening for updates…");
+    }
+
+    /// <summary>Drops readings of tags that are no longer subscribed and folds in the first reading of newly subscribed ones.</summary>
+    private void MergeInitialReadings(HashSet<string> subscribed, List<TagReading> initialReadings)
+    {
+        lock (_subscriptionSync)
+        {
+            var merged = LastReadings.Where(r => subscribed.Contains(r.NodeId)).ToList();
+            foreach (var reading in initialReadings)
+            {
+                var existing = merged.FirstOrDefault(r => string.Equals(r.NodeId, reading.NodeId, StringComparison.OrdinalIgnoreCase));
+                if (existing is null)
+                {
+                    merged.Add(reading);
+                    continue;
+                }
+
+                // A live notification got there first; keep its value, but take the resolved name/type.
+                existing.DisplayName = string.IsNullOrWhiteSpace(reading.DisplayName) ? existing.DisplayName : reading.DisplayName;
+                existing.DataType ??= reading.DataType;
+            }
+
+            LastReadings = merged;
+        }
+    }
+
+    private static TaskCompletionSource CompletedSyncIdle()
+    {
+        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        tcs.SetResult();
+        return tcs;
     }
 
     /// <summary>Records every live update of the currently selected tags to a CSV file, subscribing if necessary.</summary>
@@ -408,23 +690,38 @@ public class OpcUaService
 
         await RunSafe(async () =>
         {
+            // Go through the subscription queue even if everything looks subscribed already: a queued
+            // unsubscribe that hasn't been applied yet would otherwise cut the recording short.
             var selectedSet = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
-            if (!IsSubscribed || !selectedSet.SetEquals(_subscribedNodeIds))
-                await SubscribeToAsync(selected, ct);
+            ChangeDesiredSubscription(set => set.UnionWith(selected));
+            if (IsSubscriptionPending)
+                SetStatus("Subscribing to the selected tags before recording…");
+            await WaitForSubscriptionSyncAsync(ct);
+
+            if (!selectedSet.IsSubsetOf(_subscribedNodeIds))
+                throw new InvalidOperationException("Recording not started: the selected tags could not all be subscribed.");
 
             var writer = new StreamWriter(filePath, append: false, new UTF8Encoding(false)) { AutoFlush = true };
             var header = new List<string> { "Timestamp" };
             header.AddRange(selected.Select(id => _displayNameByNodeId.TryGetValue(id, out var dn) ? dn : id));
             writer.WriteLine(string.Join(',', header.Select(EscapeCsv)));
 
+            CancellationTokenSource? previousCts;
+            var recordingCts = new CancellationTokenSource();
+            var intervalSeconds = RecordingIntervalSeconds;
             lock (_subscriptionSync)
             {
                 _recordingWriter?.Dispose();
+                previousCts = _recordingCts;
+                _recordingCts = recordingCts;
+                _activeRecordingIntervalSeconds = intervalSeconds;
+                _lastRecordedSlotUtc = null;
                 _recordingWriter = writer;
                 RecordingFilePath = filePath;
                 RecordedRowCount = 0;
                 IsRecording = true;
                 _recordingNodeIds = selected.ToList();
+                _recordingNodeIdSet = selectedSet;
                 _recordingLatestByNodeId.Clear();
 
                 // Seed from the values the live subscription already knows: a tag that rarely
@@ -437,7 +734,12 @@ public class OpcUaService
                 }
             }
 
-            SetStatus($"Recording selected tags to: {filePath}");
+            previousCts?.Cancel();
+            previousCts?.Dispose();
+            WriteRecordingSample(DateTime.UtcNow);
+            _ = RunRecordingLoopAsync(intervalSeconds, recordingCts.Token);
+
+            SetStatus($"Recording selected tags every {intervalSeconds} s to: {filePath}");
         });
     }
 
@@ -452,23 +754,30 @@ public class OpcUaService
     private void StopRecordingInternal(string? diagnosticsMessage = null)
     {
         StreamWriter? writer;
+        CancellationTokenSource? recordingCts;
         lock (_subscriptionSync)
         {
             writer = _recordingWriter;
             _recordingWriter = null;
+            recordingCts = _recordingCts;
+            _recordingCts = null;
+            _lastRecordedSlotUtc = null;
             IsRecording = false;
             _recordingNodeIds = new();
+            _recordingNodeIdSet = new(StringComparer.OrdinalIgnoreCase);
             _recordingLatestByNodeId.Clear();
         }
 
+        recordingCts?.Cancel();
+        recordingCts?.Dispose();
         writer?.Dispose();
 
         if (diagnosticsMessage is not null)
             _diagnostics.Add(diagnosticsMessage);
     }
 
-    /// <summary>Plots the currently selected tags on the live trend chart, subscribing if necessary.</summary>
-    public async Task TrendSelectedAsync(CancellationToken ct = default)
+    /// <summary>Plots the currently selected tags on the live trend chart, queuing a subscription to any that aren't subscribed yet. Returns immediately.</summary>
+    public void TrendSelected()
     {
         var selected = GetSelectedNodeIds();
         if (!selected.Any())
@@ -477,75 +786,56 @@ public class OpcUaService
             return;
         }
 
-        await RunSafe(async () =>
-        {
-            var selectedSet = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
-            var recordingStopped = false;
-            if (!IsSubscribed || !selectedSet.SetEquals(_subscribedNodeIds))
-                recordingStopped = await SubscribeToAsync(selected, ct);
+        foreach (var id in selected)
+            AddTrendEntry(id);
 
-            foreach (var id in selected)
-            {
-                var isNew = !_trendedNodeIds.Contains(id, StringComparer.OrdinalIgnoreCase);
-                if (isNew)
-                    _trendedNodeIds.Add(id);
-                if (!_trendAxisByNodeId.ContainsKey(id))
-                    _trendAxisByNodeId[id] = "left";
-
-                // A tag whose value stays constant may never fire another subscription
-                // notification once it's already subscribed, so the chart would otherwise
-                // never receive a single point for it. Seed it with the current reading.
-                if (isNew)
-                {
-                    var reading = LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, id, StringComparison.OrdinalIgnoreCase));
-                    if (reading is not null)
-                        TrendUpdate?.Invoke(reading);
-                }
-            }
-
-            IsChartVisible = true;
-            SetStatus(recordingStopped
-                ? $"Trending {_trendedNodeIds.Count} tag(s) on the live chart. Recording stopped because the subscribed tags changed — start a new recording to include the updated set."
-                : $"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
-        });
+        IsChartVisible = true;
+        SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
+        ChangeDesiredSubscription(set => set.UnionWith(selected));
     }
 
-    /// <summary>Adds a single tag to the live trend chart, subscribing to it (alongside any existing subscriptions) if necessary.</summary>
-    public async Task AddToTrendAsync(string nodeId, CancellationToken ct = default)
+    /// <summary>Adds a single tag to the live trend chart, queuing a subscription to it (alongside any existing ones) if necessary. Returns immediately.</summary>
+    public void AddToTrend(string nodeId)
     {
         if (string.IsNullOrWhiteSpace(nodeId))
             return;
 
-        await RunSafe(async () =>
+        AddTrendEntry(nodeId);
+        IsChartVisible = true;
+        SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
+        ChangeDesiredSubscription(set => set.Add(nodeId));
+    }
+
+    private void AddTrendEntry(string nodeId)
+    {
+        var isNew = !_trendedNodeIds.Contains(nodeId, StringComparer.OrdinalIgnoreCase);
+        if (isNew)
+            _trendedNodeIds.Add(nodeId);
+        if (!_trendAxisByNodeId.ContainsKey(nodeId))
+            _trendAxisByNodeId[nodeId] = "left";
+
+        // A tag whose value stays constant may never fire another subscription
+        // notification once it's already subscribed, so the chart would otherwise
+        // never receive a single point for it. Seed it with the current reading.
+        if (isNew)
         {
-            if (!_subscribedNodeIds.Contains(nodeId))
-            {
-                var union = _subscribedNodeIds
-                    .Append(nodeId)
-                    .Distinct(StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-                await SubscribeToAsync(union, ct);
-            }
+            var reading = LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, nodeId, StringComparison.OrdinalIgnoreCase));
+            if (reading is not null)
+                TrendUpdate?.Invoke(reading);
+        }
+    }
 
-            var isNew = !_trendedNodeIds.Contains(nodeId, StringComparer.OrdinalIgnoreCase);
-            if (isNew)
-                _trendedNodeIds.Add(nodeId);
-            if (!_trendAxisByNodeId.ContainsKey(nodeId))
-                _trendAxisByNodeId[nodeId] = "left";
+    private void RemoveTrendEntries(IReadOnlyCollection<string> nodeIds)
+    {
+        if (nodeIds.Count == 0)
+            return;
 
-            // A tag whose value stays constant may never fire another subscription
-            // notification once it's already subscribed, so the chart would otherwise
-            // never receive a single point for it. Seed it with the current reading.
-            if (isNew)
-            {
-                var reading = LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, nodeId, StringComparison.OrdinalIgnoreCase));
-                if (reading is not null)
-                    TrendUpdate?.Invoke(reading);
-            }
-
-            IsChartVisible = true;
-            SetStatus($"Trending {_trendedNodeIds.Count} tag(s) on the live chart.");
-        });
+        var removed = new HashSet<string>(nodeIds, StringComparer.OrdinalIgnoreCase);
+        _trendedNodeIds.RemoveAll(removed.Contains);
+        foreach (var id in removed)
+            _trendAxisByNodeId.Remove(id);
+        if (_trendedNodeIds.Count == 0)
+            IsChartVisible = false;
     }
 
     public void RemoveFromTrend(string nodeId)
@@ -580,48 +870,6 @@ public class OpcUaService
                 DisplayName: _displayNameByNodeId.TryGetValue(id, out var n) ? n : id,
                 Axis: _trendAxisByNodeId.TryGetValue(id, out var a) ? a : "left"))
             .ToList();
-
-    /// <summary>(Re)subscribes to exactly the given node IDs, replacing the current subscription. Returns
-    /// true if an in-progress recording had to be stopped because the new tag set no longer covers every
-    /// recorded tag (its columns would otherwise silently freeze instead of receiving live updates).</summary>
-    private async Task<bool> SubscribeToAsync(List<string> selected, CancellationToken ct)
-    {
-        await StopActiveSubscriptionHandleAsync();
-
-        var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        var (handle, initialReadings) = await _client.SubscribeAsync(
-            Profile,
-            selected,
-            ApplySubscriptionUpdate,
-            linkedCts.Token);
-
-        lock (_subscriptionSync)
-        {
-            _activeSubscription = handle;
-            _subscriptionCts = linkedCts;
-            IsSubscribed = true;
-        }
-
-        _displayNameByNodeId = BuildDisplayNameMap();
-        var newSubscribedNodeIds = new HashSet<string>(selected, StringComparer.OrdinalIgnoreCase);
-
-        var recordingStopped = false;
-        if (IsRecording && !_recordingNodeIds.All(id => newSubscribedNodeIds.Contains(id)))
-        {
-            StopRecordingInternal("Recording stopped: the subscribed tags changed and no longer cover every recorded tag.");
-            recordingStopped = true;
-        }
-
-        _subscribedNodeIds = newSubscribedNodeIds;
-        SyncSubscribeEnabledFlags(_subscribedNodeIds);
-
-        _trendedNodeIds.RemoveAll(id => !_subscribedNodeIds.Contains(id));
-        if (_trendedNodeIds.Count == 0)
-            IsChartVisible = false;
-
-        LastReadings = initialReadings;
-        return recordingStopped;
-    }
 
     private Dictionary<string, string> BuildDisplayNameMap()
         => FlattenAll(TagTree)
@@ -993,21 +1241,58 @@ public class OpcUaService
     {
         foreach (var tag in FlattenAll(TagTree).Where(t => t.IsSelectable))
             tag.IsSelected = select;
+
+        if (!select)
+            DropDeselectedFromSubscription();
         Notify();
     }
 
+    /// <summary>Selects/deselects every selectable tag under <paramref name="folderTag"/>, including the tag itself
+    /// when it is a Variable (structured variables carry child tags too).</summary>
     public void SelectInFolder(OpcTag folderTag, bool select)
     {
-        foreach (var tag in FlattenAll(folderTag.Children).Where(t => t.IsSelectable))
+        foreach (var tag in ResolveInTree(FlattenAll([folderTag])).Where(t => t.IsSelectable))
             tag.IsSelected = select;
 
+        if (!select)
+            DropDeselectedFromSubscription();
         Notify();
     }
 
     public void ToggleTag(OpcTag tag)
     {
-        tag.IsSelected = !tag.IsSelected;
+        var target = ResolveInTree([tag])[0];
+        target.IsSelected = !target.IsSelected;
+
+        if (!target.IsSelected)
+            DropDeselectedFromSubscription();
         Notify();
+    }
+
+    /// <summary>
+    /// Maps tags back to their instances in <see cref="TagTree"/>. The tag browser's filtered view shallow-clones
+    /// ancestors that don't match the filter themselves, so a clicked node may be a copy; mutating the copy would
+    /// be lost on the next render. Tags that are already in the tree (or unknown to it) are returned unchanged.
+    /// </summary>
+    private List<OpcTag> ResolveInTree(IEnumerable<OpcTag> tags)
+    {
+        var all = FlattenAll(TagTree).ToList();
+        var inTree = new HashSet<OpcTag>(all, ReferenceEqualityComparer.Instance);
+        Dictionary<string, OpcTag>? byNodeId = null;
+
+        var result = new List<OpcTag>();
+        foreach (var tag in tags)
+        {
+            if (inTree.Contains(tag))
+            {
+                result.Add(tag);
+                continue;
+            }
+
+            byNodeId ??= all.GroupBy(t => t.NodeId).ToDictionary(g => g.Key, g => g.First());
+            result.Add(byNodeId.TryGetValue(tag.NodeId, out var original) ? original : tag);
+        }
+        return result;
     }
 
     public List<string> GetSelectedNodeIds()
@@ -1021,23 +1306,17 @@ public class OpcUaService
            .Where(t => t.IsSelectable && t.IsSelected)
            .ToList();
 
-    /// <summary>Node IDs of selected tags that are also marked for subscription (see <see cref="OpcTag.IsSubscribeEnabled"/>).</summary>
-    public List<string> GetSubscribeEnabledNodeIds()
-        => FlattenAll(TagTree)
-           .Where(t => t.IsSelectable && t.IsSelected && t.IsSubscribeEnabled)
-           .Select(t => t.NodeId)
-           .ToList();
-
-    /// <summary>Keeps every tag's "Include in subscription" checkbox in sync with what's actually subscribed,
-    /// so it's never possible for a checkbox to be checked while its tag isn't live-subscribed (or vice versa) —
-    /// including tags a trend or recording auto-subscribed without the user checking their box directly.</summary>
-    private void SyncSubscribeEnabledFlags(HashSet<string> subscribedNodeIds)
+    /// <summary>Subscriptions are managed from the Selected Tags table, so a tag leaving the selection also leaves
+    /// the subscription (and the trend chart) rather than staying subscribed where the user can no longer see it.</summary>
+    private void DropDeselectedFromSubscription()
     {
-        foreach (var tag in FlattenAll(TagTree))
-        {
-            if (tag.IsSelectable)
-                tag.IsSubscribeEnabled = subscribedNodeIds.Contains(tag.NodeId);
-        }
+        var selected = new HashSet<string>(GetSelectedNodeIds(), StringComparer.OrdinalIgnoreCase);
+        var dropped = _desiredNodeIds.Where(id => !selected.Contains(id)).ToList();
+        if (dropped.Count == 0)
+            return;
+
+        RemoveTrendEntries(dropped);
+        ChangeDesiredSubscription(set => set.ExceptWith(dropped));
     }
 
     // -----------------------------------------------------------------------
@@ -1185,7 +1464,8 @@ public class OpcUaService
             var existing = LastReadings.FirstOrDefault(r => string.Equals(r.NodeId, update.NodeId, StringComparison.OrdinalIgnoreCase));
             if (existing is null)
             {
-                LastReadings.Add(update);
+                // Copy-on-write: the renderer enumerates LastReadings without taking this lock.
+                LastReadings = [.. LastReadings, update];
             }
             else
             {
@@ -1197,8 +1477,9 @@ public class OpcUaService
                 existing.Error = update.Error;
             }
 
-            if (IsRecording)
-                WriteRecordingRow(update);
+            // Only remember the value here; the recording loop writes one row per interval.
+            if (IsRecording && _recordingNodeIdSet.Contains(update.NodeId))
+                _recordingLatestByNodeId[update.NodeId] = update;
         }
 
         if (_trendedNodeIds.Contains(update.NodeId, StringComparer.OrdinalIgnoreCase))
@@ -1207,24 +1488,68 @@ public class OpcUaService
         Notify();
     }
 
-    /// <summary>Writes one wide-format row: the triggering update's timestamp, plus the latest known value
-    /// (or "-" if never received, errored, or of bad quality) for every recorded tag.</summary>
-    private void WriteRecordingRow(TagReading update)
+    /// <summary>Writes a recording row at every interval boundary until the recording is stopped.</summary>
+    private async Task RunRecordingLoopAsync(int intervalSeconds, CancellationToken ct)
     {
-        if (_recordingWriter is null)
-            return;
-
-        _recordingLatestByNodeId[update.NodeId] = update;
-
-        var fields = new List<string> { EscapeCsv(update.Timestamp ?? DateTime.UtcNow.ToString("o")) };
-        foreach (var nodeId in _recordingNodeIds)
+        try
         {
-            _recordingLatestByNodeId.TryGetValue(nodeId, out var reading);
-            fields.Add(EscapeCsv(IsBadQuality(reading) ? "-" : reading!.Value?.ToString() ?? "-"));
+            while (!ct.IsCancellationRequested)
+            {
+                var now = DateTime.UtcNow;
+                var next = RecordingSlot(now, intervalSeconds).AddSeconds(intervalSeconds);
+                // A few ms past the boundary, so the floored slot is the boundary itself, not the one before.
+                await Task.Delay(next - now + TimeSpan.FromMilliseconds(10), ct);
+                if (WriteRecordingSample(DateTime.UtcNow))
+                    Notify();
+            }
         }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "CSV recording loop failed");
+            StopRecordingInternal($"Recording stopped: {ex.Message}");
+            SetStatus($"Recording stopped: {ex.Message}", isError: true);
+        }
+    }
 
-        _recordingWriter.WriteLine(string.Join(',', fields));
-        RecordedRowCount++;
+    /// <summary>The start of the recording interval containing <paramref name="utc"/>: whole seconds, aligned to a multiple of the interval.</summary>
+    internal static DateTime RecordingSlot(DateTime utc, int intervalSeconds)
+    {
+        var intervalTicks = TimeSpan.TicksPerSecond * Math.Max(1, intervalSeconds);
+        return new DateTime(utc.Ticks - utc.Ticks % intervalTicks, DateTimeKind.Utc);
+    }
+
+    internal static string FormatRecordingTimestamp(DateTime slotUtc)
+        => slotUtc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>Writes one wide-format row stamped with the interval slot of <paramref name="utcNow"/> (whole seconds), plus
+    /// the latest known value (or "-" if never received, errored, or of bad quality) for every recorded tag.
+    /// A slot already written is skipped, so the file never holds duplicate timestamps.</summary>
+    internal bool WriteRecordingSample(DateTime utcNow)
+    {
+        lock (_subscriptionSync)
+        {
+            if (_recordingWriter is null)
+                return false;
+
+            var slot = RecordingSlot(utcNow, _activeRecordingIntervalSeconds);
+            if (_lastRecordedSlotUtc is { } last && slot <= last)
+                return false;
+
+            var fields = new List<string> { FormatRecordingTimestamp(slot) };
+            foreach (var nodeId in _recordingNodeIds)
+            {
+                _recordingLatestByNodeId.TryGetValue(nodeId, out var reading);
+                fields.Add(EscapeCsv(IsBadQuality(reading) ? "-" : reading!.Value?.ToString() ?? "-"));
+            }
+
+            _recordingWriter.WriteLine(string.Join(',', fields));
+            _lastRecordedSlotUtc = slot;
+            RecordedRowCount++;
+            return true;
+        }
     }
 
     private static bool IsBadQuality(TagReading? reading)
@@ -1233,26 +1558,19 @@ public class OpcUaService
            || reading.Quality is null
            || reading.Quality.Contains("Bad", StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Tears down just the live OPC UA subscription handle, leaving recording/trend state untouched (used when resubscribing to a new tag selection).</summary>
+    /// <summary>Tears down just the live OPC UA subscription handle, leaving recording/trend state untouched.</summary>
     private async Task<bool> StopActiveSubscriptionHandleAsync()
     {
-        IAsyncDisposable? handle;
-        CancellationTokenSource? cts;
+        ILiveSubscription? handle;
 
         lock (_subscriptionSync)
         {
             handle = _activeSubscription;
-            cts = _subscriptionCts;
             _activeSubscription = null;
-            _subscriptionCts = null;
             IsSubscribed = false;
         }
 
         _subscribedNodeIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        SyncSubscribeEnabledFlags(_subscribedNodeIds);
-
-        cts?.Cancel();
-        cts?.Dispose();
 
         if (handle is null)
             return false;

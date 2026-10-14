@@ -13,14 +13,14 @@ namespace OpcUaExporter.Operations;
 /// </remarks>
 internal static class OpcUaDataTypes
 {
-    internal static async Task<string?> GetDataTypeNameCachedAsync(NodeId dataTypeId, Session session, BrowseProgressState progress)
+    internal static async Task<string?> GetDataTypeNameCachedAsync(NodeId dataTypeId, Session session, DataTypeNameCache cache)
     {
         var key = dataTypeId.ToString();
-        if (progress.DataTypeNameCache.TryGetValue(key, out var cached))
+        if (cache.TryGet(key, out var cached))
             return cached;
 
         var resolved = await GetDataTypeName(dataTypeId, session);
-        progress.DataTypeNameCache.TryAdd(key, resolved);
+        cache.Add(key, resolved);
         return resolved;
     }
 

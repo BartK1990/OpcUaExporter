@@ -31,4 +31,8 @@
     <ProjectReference Include="..\OpcUaShared\OpcUaShared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpcUaExporter.Tests" />
+  </ItemGroup>
+
 </Project>

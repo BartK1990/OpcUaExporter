@@ -56,8 +56,12 @@
             <input class="field-input" @bind="Opc.Profile.EndpointUrl"
                    placeholder="opc.tcp://192.168.1.10:4840" />
 
-            <button class="btn btn-primary" @onclick="Browse" disabled="@Opc.IsBusy">
-                @if (Opc.IsBusy)
+            <button class="btn btn-primary" @onclick="Browse" disabled="@(Opc.IsBusy || Opc.IsBrowsing)">
+                @if (Opc.IsBrowsing)
+                {
+                    <span class="spinner"></span><span>Browsing…</span>
+                }
+                else if (Opc.IsBusy)
                 {
                     <span class="spinner"></span><span>Working…</span>
                 }
@@ -130,7 +134,7 @@
     <!-- ═══════════════════════ MAIN CONTENT ═══════════════════════ -->
     <main class="content">
 
-        @if (!Opc.TagTree.Any() && !Opc.IsBusy)
+        @if (!Opc.TagTree.Any() && !Opc.IsBusy && !Opc.IsBrowsing)
         {
             <div class="empty-state">
                 <h2>No Tags Loaded</h2>
@@ -146,6 +150,12 @@
                     <div class="content-header">
                         <h2>Tag Browser</h2>
                         <span class="badge">@Opc.BrowsedVariableCount variable tags</span>
+                        @if (Opc.IsBrowsing)
+                        {
+                            <span class="badge" title="The deep scan keeps running in the background. Expand any node to load it right away.">
+                                <span class="spinner spinner-xs"></span> scanning…
+                            </span>
+                        }
                     </div>
                     <div class="tag-search-row">
                         <div class="tag-search-wrap">
@@ -184,6 +194,7 @@
                                          OnSelectAllInFolder="HandleSelectAllInFolder"
                                          OnSelectNoneInFolder="HandleSelectNoneInFolder"
                                          OnContextMenu="HandleContextMenu"
+                                         OnLoadChildren="HandleLoadChildren"
                                          SubscribedNodeIds="Opc.SubscribedNodeIds"
                                          FilterActive="IsTagFilterActive" />
                             }
@@ -210,15 +221,15 @@
                             ▶ Read Values
                         </button>
 
-                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)" title="Checks the subscribe box for every selected tag and subscribes to all of them">
+                        <button class="btn btn-secondary" @onclick="SubscribeSelected" disabled="@(SelectedCount == 0)" title="Checks the subscribe box for every selected tag and subscribes to all of them">
                             <i class="bi bi-bell"></i> Subscribe All
                         </button>
 
-                        <button class="btn btn-secondary" @onclick="TrendSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                        <button class="btn btn-secondary" @onclick="TrendSelected" disabled="@(SelectedCount == 0)">
                             <i class="bi bi-graph-up"></i> Trend All
                         </button>
 
-                        <button class="btn btn-ghost" @onclick="ClearSelected" disabled="@(Opc.IsBusy || SelectedCount == 0)">
+                        <button class="btn btn-ghost" @onclick="ClearSelected" disabled="@(SelectedCount == 0)">
                             ✕ Clear All
                         </button>
                     </div>
@@ -229,6 +240,12 @@
                             <button class="btn btn-secondary" @onclick="StartRecording" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                                 ⏺ Record to CSV
                             </button>
+                            <label class="trend-window-control" title="Seconds between rows in the CSV recording">
+                                every
+                                <input type="number" class="trend-window-input" min="1" max="@OpcUaService.MaxRecordingIntervalSeconds" step="1"
+                                       value="@Opc.RecordingIntervalSeconds" @onchange="OnRecordingIntervalChanged" />
+                                s
+                            </label>
                         }
                         else
                         {
@@ -240,17 +257,47 @@
                                 <span class="recording-path">Recording (@Opc.RecordedRowCount rows) → @Opc.RecordingFilePath</span>
                             </div>
                         }
+
+                        <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@(!Opc.IsSubscribed && !Opc.IsSubscriptionPending)">
+                            ⏹ Stop Subscription
+                        </button>
+
+                        @if (Opc.IsSubscriptionPending)
+                        {
+                            <span class="badge" title="Applying subscription changes in the background">
+                                <span class="spinner spinner-xs"></span> updating subscription…
+                            </span>
+                        }
                     </div>
 
-                    <button class="btn btn-ghost" @onclick="StopSubscription" disabled="@(Opc.IsBusy || !Opc.IsSubscribed)">
-                        ⏹ Stop Subscription
-                    </button>
+                    @if (SelectedCount > 0)
+                    {
+                        <div class="tag-search-row selected-search-row">
+                            <div class="tag-search-wrap">
+                                <i class="bi bi-search tag-search-icon"></i>
+                                <input class="field-input tag-search-input" placeholder="Filter selected by name or node ID…"
+                                       @bind="_selectedFilter" @bind:event="oninput" />
+                            </div>
+                            @if (IsSelectedFilterActive)
+                            {
+                                <button class="btn btn-ghost icon-btn" title="Clear filter" @onclick="ClearSelectedFilter"><i class="bi bi-x-lg"></i></button>
+                                <span class="badge">@SelectedTags.Count of @SelectedCount</span>
+                            }
+                        </div>
+                    }
 
                     @if (SelectedCount == 0)
                     {
                         <div class="empty-state">
                             <div class="empty-icon">☐</div>
                             <p>Check tags on the left to add them here.</p>
+                        </div>
+                    }
+                    else if (IsSelectedFilterActive && SelectedTags.Count == 0)
+                    {
+                        <div class="empty-state">
+                            <div class="empty-icon"><i class="bi bi-search"></i></div>
+                            <p>No selected tags match your filter.</p>
                         </div>
                     }
                     else
@@ -298,15 +345,20 @@
                                     {
                                         var reading = FindReading(tag.NodeId);
                                         var subscribed = Opc.SubscribedNodeIds.Contains(tag.NodeId);
+                                        var subscribeRequested = Opc.IsSubscriptionRequested(tag.NodeId);
                                         <tr class="@(reading?.Error != null ? "row-error" : "")">
                                             <td class="col-fixed-icon">
                                                 <button class="btn btn-ghost icon-btn" title="Remove from selection" @onclick="() => Opc.ToggleTag(tag)">✕</button>
                                             </td>
                                             <td class="col-fixed-icon">
-                                                <input type="checkbox" class="tag-check" title="@(tag.IsSubscribeEnabled ? "Exclude from subscription" : "Include in subscription")"
-                                                       checked="@tag.IsSubscribeEnabled" disabled="@Opc.IsBusy"
+                                                <input type="checkbox" class="tag-check" title="@(subscribeRequested ? "Exclude from subscription" : "Include in subscription")"
+                                                       checked="@subscribeRequested"
                                                        @onchange="() => ToggleTagSubscribe(tag)" />
-                                                @if (subscribed)
+                                                @if (subscribeRequested != subscribed)
+                                                {
+                                                    <span class="spinner spinner-xs subscribe-pending" title="@(subscribeRequested ? "Subscribing…" : "Unsubscribing…")"></span>
+                                                }
+                                                else if (subscribed)
                                                 {
                                                     <span class="subscribed-dot" title="Subscribed"></span>
                                                 }
@@ -314,7 +366,7 @@
                                             <td class="col-fixed-icon">
                                                 @{ var trending = Opc.TrendedNodeIds.Contains(tag.NodeId, StringComparer.OrdinalIgnoreCase); }
                                                 <input type="checkbox" class="tag-check" title="@(trending ? "Remove from trend" : "Add to trend")"
-                                                       checked="@trending" disabled="@Opc.IsBusy"
+                                                       checked="@trending"
                                                        @onchange="() => ToggleTagTrend(tag.NodeId)" />
                                             </td>
                                             <td>@tag.DisplayName</td>
@@ -391,7 +443,12 @@
                             @if (!_legendCollapsed)
                             {
                                 <div class="chart-legend-list">
-                                    @{ var trendIndex = 0; }
+                                    @{
+                                        var trendIndex = 0;
+                                        var readingsById = Opc.LastReadings
+                                            .GroupBy(r => r.NodeId, StringComparer.OrdinalIgnoreCase)
+                                            .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+                                    }
                                     @foreach (var t in Opc.GetTrendedTagInfos())
                                     {
                                         var color = Palette[trendIndex++ % Palette.Length];
@@ -399,6 +456,8 @@
                                         <div class="legend-row">
                                             <span class="legend-dot" style="background:@color;"></span>
                                             <span class="legend-name" title="@t.NodeId">@t.DisplayName</span>
+                                            @{ var legendValue = FormatLegendValue(readingsById.GetValueOrDefault(t.NodeId)); }
+                                            <span class="legend-value" title="@legendValue">@legendValue</span>
                                             @if (isNonNumeric)
                                             {
                                                 <span class="legend-note" title="This tag's value isn't numeric, so it can't be plotted.">n/a</span>
@@ -563,11 +622,16 @@
     private ElementReference _chartCanvasRef;
     private bool _chartJsInitialized;
     private bool _chartDirty;
+    private string? _chartTrendSignature;
     private bool _legendCollapsed;
     private int _trendWindowSeconds = 60;
 
     private string _tagFilter = string.Empty;
     private bool _selectedOnly;
+    private string _selectedFilter = string.Empty;
+
+    private bool IsSelectedFilterActive => !string.IsNullOrWhiteSpace(_selectedFilter);
+    private void ClearSelectedFilter() => _selectedFilter = string.Empty;
 
     private int SelectedCount  => Opc.GetSelectedNodeIds().Count;
     private int FlatTagCount   => Opc.BrowsedVariableCount;
@@ -576,6 +640,9 @@
         get
         {
             var tags = Opc.GetSelectedTags().AsEnumerable();
+            if (IsSelectedFilterActive)
+                tags = tags.Where(t => t.DisplayName.Contains(_selectedFilter, StringComparison.OrdinalIgnoreCase)
+                                    || t.NodeId.Contains(_selectedFilter, StringComparison.OrdinalIgnoreCase));
             tags = _selectedSort switch
             {
                 SortDirection.Ascending  => tags.OrderBy(t => t.DisplayName, StringComparer.OrdinalIgnoreCase),
@@ -676,7 +743,9 @@
             Value       = tag.Value,
             Quality     = tag.Quality,
             IsSelected  = tag.IsSelected,
-            Children    = matchedChildren
+            Children    = matchedChildren,
+            // A pruned view of the real children: never lazy-load into the clone.
+            ChildrenLoaded = true
         };
     }
 
@@ -721,9 +790,12 @@
                 }
             }
 
-            if (_chartDirty)
+            // The service can also change the trended set (e.g. deselecting or unsubscribing a trended tag).
+            var trendSignature = string.Join('|', Opc.GetTrendedTagInfos().Select(t => $"{t.NodeId}:{t.Axis}"));
+            if (_chartDirty || trendSignature != _chartTrendSignature)
             {
                 _chartDirty = false;
+                _chartTrendSignature = trendSignature;
                 try
                 {
                     var series = Opc.GetTrendedTagInfos()
@@ -745,6 +817,7 @@
         else
         {
             _chartJsInitialized = false;
+            _chartTrendSignature = null;
         }
     }
 
@@ -755,17 +828,19 @@
         return Task.CompletedTask;
     }
     private async Task ReadSelected()  => await Opc.ReadSelectedAsync();
-    private async Task SubscribeSelected() => await Opc.SubscribeSelectedAsync();
-    private async Task StopSubscription() => await Opc.StopSubscriptionAsync();
-    private async Task ClearSelected() => await Opc.ClearSelectionAsync();
+    // Subscription/trend actions only record what the user wants and return at once; the service
+    // applies them to the server in the background (see OpcUaService.ChangeDesiredSubscription).
+    private void SubscribeSelected() => Opc.SubscribeSelected();
+    private void StopSubscription() => Opc.StopSubscription();
+    private void ClearSelected() => Opc.ClearSelection();
 
-    private async Task TrendSelected()
+    private void TrendSelected()
     {
-        await Opc.TrendSelectedAsync();
+        Opc.TrendSelected();
         _chartDirty = true;
     }
 
-    private async Task ToggleTagSubscribe(OpcTag tag) => await Opc.ToggleTagSubscribeAsync(tag);
+    private void ToggleTagSubscribe(OpcTag tag) => Opc.ToggleTagSubscribe(tag);
 
     private async Task ToggleTagTrend(string nodeId)
     {
@@ -775,7 +850,7 @@
         }
         else
         {
-            await Opc.AddToTrendAsync(nodeId);
+            Opc.AddToTrend(nodeId);
             _chartDirty = true;
         }
     }
@@ -907,6 +982,30 @@
 
     private async Task StopRecording() => await Opc.StopRecordingAsync();
 
+    private void OnRecordingIntervalChanged(ChangeEventArgs e)
+    {
+        if (int.TryParse(e.Value?.ToString(), out var seconds))
+            Opc.RecordingIntervalSeconds = seconds;
+    }
+
+    /// <summary>Current value shown next to a trended tag's name in the chart legend.</summary>
+    private static string FormatLegendValue(TagReading? reading)
+    {
+        if (reading is null || reading.Error is not null)
+            return "-";
+
+        var value = reading.Value is Array { Length: 1 } single ? single.GetValue(0) : reading.Value;
+        return value switch
+        {
+            null => "-",
+            double d => d.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+            float f => f.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+            decimal m => m.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
+            IFormattable fmt => fmt.ToString(null, System.Globalization.CultureInfo.InvariantCulture),
+            _ => value.ToString() ?? "-"
+        };
+    }
+
     private async Task TrustCertificate(string thumbprint)
         => await Opc.TrustCertificateAsync(thumbprint);
 
@@ -989,6 +1088,8 @@
     {
         Opc.ToggleTag(tag);
     }
+
+    private Task HandleLoadChildren(OpcTag tag) => Opc.LoadChildrenAsync(tag);
 
     private void HandleSelectAllInFolder(OpcTag tag)
     {
