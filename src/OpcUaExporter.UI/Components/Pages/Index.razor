@@ -386,9 +386,12 @@
                                                     </select>
                                                     @if (IsDateTimeType(rowDataType))
                                                     {
-                                                        <input type="datetime-local" step="1" lang="sv-SE" class="mono write-input write-input-datetime"
-                                                               value="@FormatDateTimeLocal(GetWriteDateTime(tag.NodeId))"
-                                                               @onchange="e => SetWriteDateTime(tag.NodeId, ParseDateTimeLocal(e.Value?.ToString()))" />
+                                                        var dateTimeText = GetWriteDateTimeText(tag.NodeId);
+                                                        <input type="text" class="mono write-input write-input-datetime @(IsInvalidDateTimeText(dateTimeText) ? "write-input-invalid" : null)"
+                                                               placeholder="YYYY-MM-DD HH:MM:SS" maxlength="19" spellcheck="false" autocomplete="off"
+                                                               title="Date and time, 24-hour: YYYY-MM-DD HH:MM:SS"
+                                                               value="@dateTimeText"
+                                                               @oninput="e => _writeDateTimeTextByNodeId[tag.NodeId] = e.Value?.ToString() ?? string.Empty" />
                                                     }
                                                     else
                                                     {
@@ -584,10 +587,11 @@
                 <div class="field-label">Value</div>
                 @if (IsWriteDialogDateTime)
                 {
-                    <input type="datetime-local" step="1" lang="sv-SE" class="field-input"
-                           value="@FormatDateTimeLocal(_writeDialogDateTimeValue)"
-                           @onchange="OnWriteDialogDateTimeChanged" disabled="@Opc.IsBusy" />
-                    <p class="write-dialog-hint">Picker enforces a valid date/time; value is written as UTC.</p>
+                    <input type="text" class="field-input mono @(IsInvalidDateTimeText(_writeDialogDateTimeText) ? "write-input-invalid" : null)"
+                           placeholder="YYYY-MM-DD HH:MM:SS" maxlength="19" spellcheck="false" autocomplete="off"
+                           @bind="_writeDialogDateTimeText" @bind:event="oninput"
+                           @onkeydown="OnWriteDialogKeyDown" disabled="@Opc.IsBusy" />
+                    <p class="write-dialog-hint">Format YYYY-MM-DD HH:MM:SS (24-hour); value is written as UTC.</p>
                 }
                 else
                 {
@@ -1115,7 +1119,7 @@
     private string? _writeDialogDisplayName;
     private string? _writeDialogDataType;
     private string _writeDialogValue = string.Empty;
-    private DateTime? _writeDialogDateTimeValue;
+    private string _writeDialogDateTimeText = string.Empty;
     private string? _writeDialogError;
 
     /// <summary>Effective data type for the write dialog: the user's manual override (if any) for the node being written, else the auto-detected type.</summary>
@@ -1124,12 +1128,14 @@
 
     private bool IsWriteDialogDateTime => IsDateTimeType(EffectiveWriteDialogDataType);
 
+    private DateTime? WriteDialogDateTimeValue => ParseDateTimeText(_writeDialogDateTimeText);
+
     private bool CanSubmitWriteDialog => IsWriteDialogDateTime
-        ? _writeDialogDateTimeValue.HasValue
+        ? WriteDialogDateTimeValue.HasValue
         : !string.IsNullOrWhiteSpace(_writeDialogValue);
 
     private readonly Dictionary<string, string> _writeInputByNodeId = new(StringComparer.OrdinalIgnoreCase);
-    private readonly Dictionary<string, DateTime?> _writeDateTimeByNodeId = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _writeDateTimeTextByNodeId = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Manual data-type override per node, keyed by node id and shared between the inline
@@ -1168,16 +1174,28 @@
             : isoTimestamp;
     }
 
-    /// <summary>Formats a value for an <c>&lt;input type="datetime-local"&gt;</c>, which requires seconds-precision, offset-free ISO text.</summary>
-    private static string FormatDateTimeLocal(DateTime? value) =>
-        value?.ToString("yyyy-MM-ddTHH:mm:ss") ?? string.Empty;
+    /// <summary>
+    /// Fixed, culture-independent 24-hour format for DateTime write fields. A plain text input is used
+    /// instead of <c>&lt;input type="datetime-local"&gt;</c>, whose display format (AM/PM, field order)
+    /// follows the OS locale and can't be overridden.
+    /// </summary>
+    private const string DateTimeInputFormat = "yyyy-MM-dd HH:mm:ss";
 
-    /// <summary>Parses the exact format emitted by an <c>&lt;input type="datetime-local"&gt;</c>; anything else (including an empty/cleared field) is rejected.</summary>
-    private static DateTime? ParseDateTimeLocal(string? text) =>
-        DateTime.TryParseExact(text, "yyyy-MM-ddTHH:mm:ss", System.Globalization.CultureInfo.InvariantCulture,
+    private static readonly string[] AcceptedDateTimeInputFormats = [DateTimeInputFormat, "yyyy-MM-ddTHH:mm:ss"];
+
+    private static string FormatDateTimeText(DateTime? value) =>
+        value?.ToString(DateTimeInputFormat, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty;
+
+    /// <summary>Parses "yyyy-MM-dd HH:mm:ss" (an ISO "T" separator is also accepted); anything else, including an empty field, is rejected.</summary>
+    private static DateTime? ParseDateTimeText(string? text) =>
+        DateTime.TryParseExact(text?.Trim(), AcceptedDateTimeInputFormats, System.Globalization.CultureInfo.InvariantCulture,
             System.Globalization.DateTimeStyles.None, out var parsed)
             ? parsed
             : null;
+
+    /// <summary>True when the field has text that isn't a valid date/time (an empty field is not flagged).</summary>
+    private static bool IsInvalidDateTimeText(string? text) =>
+        !string.IsNullOrWhiteSpace(text) && ParseDateTimeText(text) is null;
 
     private void HandleContextMenu((OpcTag Tag, MouseEventArgs Args) e)
     {
@@ -1233,17 +1251,17 @@
         if (IsWriteDialogDateTime)
         {
             _writeDialogValue = string.Empty;
-            _writeDialogDateTimeValue = currentValue switch
+            _writeDialogDateTimeText = FormatDateTimeText(currentValue switch
             {
                 DateTime dt => dt,
                 string s when DateTime.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
                     System.Globalization.DateTimeStyles.RoundtripKind, out var parsed) => parsed,
                 _ => null
-            };
+            });
         }
         else
         {
-            _writeDialogDateTimeValue = null;
+            _writeDialogDateTimeText = string.Empty;
             _writeDialogValue = currentValue?.ToString() ?? string.Empty;
         }
 
@@ -1257,12 +1275,6 @@
         _writeDialogError = null;
     }
 
-    private void OnWriteDialogDateTimeChanged(ChangeEventArgs e)
-    {
-        _writeDialogDateTimeValue = ParseDateTimeLocal(e.Value?.ToString());
-        _writeDialogError = _writeDialogDateTimeValue is null ? "Enter a valid date and time." : null;
-    }
-
     private void OnWriteDialogDataTypeChanged(ChangeEventArgs e)
     {
         if (_writeDialogNodeId is null)
@@ -1274,13 +1286,17 @@
         // Re-derive the value fields for the newly selected data type.
         if (IsWriteDialogDateTime)
         {
-            _writeDialogDateTimeValue ??= DateTime.TryParse(_writeDialogValue, System.Globalization.CultureInfo.InvariantCulture,
-                System.Globalization.DateTimeStyles.RoundtripKind, out var parsed) ? parsed : null;
+            if (string.IsNullOrWhiteSpace(_writeDialogDateTimeText)
+                && DateTime.TryParse(_writeDialogValue, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out var parsed))
+            {
+                _writeDialogDateTimeText = FormatDateTimeText(parsed);
+            }
         }
-        else if (_writeDialogDateTimeValue.HasValue)
+        else if (WriteDialogDateTimeValue is { } dt)
         {
-            _writeDialogValue = DateTime.SpecifyKind(_writeDialogDateTimeValue.Value, DateTimeKind.Utc).ToString("o");
-            _writeDialogDateTimeValue = null;
+            _writeDialogValue = DateTime.SpecifyKind(dt, DateTimeKind.Utc).ToString("o");
+            _writeDialogDateTimeText = string.Empty;
         }
     }
 
@@ -1290,7 +1306,7 @@
             return;
 
         var rawValue = IsWriteDialogDateTime
-            ? DateTime.SpecifyKind(_writeDialogDateTimeValue!.Value, DateTimeKind.Utc).ToString("o")
+            ? DateTime.SpecifyKind(WriteDialogDateTimeValue!.Value, DateTimeKind.Utc).ToString("o")
             : _writeDialogValue;
 
         var result = await Opc.WriteValueAsync(_writeDialogNodeId, rawValue, GetDataTypeOverride(_writeDialogNodeId));
@@ -1309,11 +1325,11 @@
     private string GetWriteInput(string nodeId)
         => _writeInputByNodeId.TryGetValue(nodeId, out var v) ? v : string.Empty;
 
-    private DateTime? GetWriteDateTime(string nodeId)
-        => _writeDateTimeByNodeId.TryGetValue(nodeId, out var v) ? v : null;
+    private string GetWriteDateTimeText(string nodeId)
+        => _writeDateTimeTextByNodeId.TryGetValue(nodeId, out var v) ? v : string.Empty;
 
-    private void SetWriteDateTime(string nodeId, DateTime? value)
-        => _writeDateTimeByNodeId[nodeId] = value;
+    private DateTime? GetWriteDateTime(string nodeId)
+        => ParseDateTimeText(GetWriteDateTimeText(nodeId));
 
     private bool CanWriteInline(string nodeId, string? dataType) =>
         IsDateTimeType(dataType) ? GetWriteDateTime(nodeId).HasValue : !string.IsNullOrWhiteSpace(GetWriteInput(nodeId));
