@@ -59,8 +59,37 @@ public sealed class DateTimeWriteTests(E2EEnvironment env) : UiTestBase(env)
         await row.Locator("button[title='Write value']").ClickAsync();
 
         await Page.GetByRole(AriaRole.Button, new() { Name = "Read Values" }).ClickAsync();
-        // The value column formats with the current culture; only the 24h time part is culture-independent.
-        await Expect(row).ToContainTextAsync("17:45:30");
+        // Shown in the same fixed 24h format it was typed in, whatever the machine's culture.
+        await Expect(row).ToContainTextAsync("2026-10-14 17:45:30");
         AssertNoPageErrors();
+    }
+
+    [Fact]
+    public async Task DateTime_values_are_shown_as_24h_text_in_the_table_and_legend()
+    {
+        await BrowseSimServerAsync();
+        await ExpandAsync("Simulation", "Dynamic");
+        await SelectTagsAsync("Clock");
+        await Page.GetByRole(AriaRole.Button, new() { Name = "Trend All" }).ClickAsync();
+
+        var format = new System.Text.RegularExpressions.Regex(@"\b\d{4}-\d{2}-\d{2} ([01]\d|2[0-3]):[0-5]\d:[0-5]\d\b");
+        var row = SelectedRow("Simulation/Dynamic/Clock");
+
+        var valueCell = row.Locator("td").Nth(await ValueColumnIndexAsync());
+        await Expect(valueCell).ToHaveTextAsync(format);
+        // The column may be narrower than the value; the full text is on hover.
+        await Expect(valueCell).ToHaveAttributeAsync("title", format);
+        await Expect(Page.Locator(".chart-legend-panel .legend-value").First).ToHaveTextAsync(format);
+
+        await Expect(row).Not.ToContainTextAsync(new System.Text.RegularExpressions.Regex("AM|PM"));
+        AssertNoPageErrors();
+    }
+
+    private async Task<int> ValueColumnIndexAsync()
+    {
+        var headers = await Page.Locator("table:has(tr:has-text(\"Simulation/\")) thead th").AllInnerTextsAsync();
+        var index = headers.ToList().FindIndex(h => h.Trim().Equals("Value", StringComparison.OrdinalIgnoreCase));
+        Assert.True(index >= 0, $"No Value column among: {string.Join(", ", headers)}");
+        return index;
     }
 }
