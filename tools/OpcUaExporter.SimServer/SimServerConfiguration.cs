@@ -47,8 +47,7 @@ internal static class SimServerConfiguration
                 MinRequestThreadCount = 5,
                 MaxRequestThreadCount = 100,
                 MaxQueuedRequestCount = 200
-            },
-            TraceConfiguration = new TraceConfiguration()
+            }
         };
 
         await config.ValidateAsync(ApplicationType.Server);

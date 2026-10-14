@@ -14,8 +14,6 @@
     <TargetFramework>net8.0</TargetFramework>
     <RootNamespace>OpcUaExporter.Web</RootNamespace>
     <AssemblyName>OpcUaExporter.Web</AssemblyName>
-    <Nullable>enable</Nullable>
-    <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 
   <ItemGroup>

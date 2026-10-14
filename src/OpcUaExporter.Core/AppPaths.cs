@@ -9,15 +9,26 @@ namespace OpcUaExporter;
 public static class AppPaths
 {
     /// <summary>
-    /// <c>%LocalAppData%\OpcUaExporter</c>. The directory is created on first access.
+    /// Environment variable that, when set, replaces <c>%LocalAppData%\OpcUaExporter</c>
+    /// as the root directory — lets end-to-end tests and throwaway sessions run without
+    /// touching the user's real profiles, settings and certificates.
+    /// </summary>
+    public const string RootDirectoryOverrideVariable = "OPCUAEXPORTER_DATA_DIR";
+
+    /// <summary>
+    /// <c>%LocalAppData%\OpcUaExporter</c>, or the directory named by
+    /// <see cref="RootDirectoryOverrideVariable"/>. The directory is created on first access.
     /// </summary>
     public static string RootDirectory
     {
         get
         {
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "OpcUaExporter");
+            var overrideDir = Environment.GetEnvironmentVariable(RootDirectoryOverrideVariable);
+            var dir = !string.IsNullOrWhiteSpace(overrideDir)
+                ? overrideDir
+                : Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    "OpcUaExporter");
 
             Directory.CreateDirectory(dir);
             return dir;
