@@ -52,8 +52,15 @@ jobs:
       - name: Restore
         run: dotnet restore "${{ github.workspace }}/OpcUaExporter.sln"
 
-      - name: Test
+      - name: Test exporter
         run: dotnet test "${{ github.workspace }}/tests/OpcUaExporter.Tests/OpcUaExporter.Tests.csproj" -c Release --no-restore
+
+      - name: Test bridge
+        # The integration tests start real OPC UA servers and generate certificates, so
+        # they are left out of the release path and run on demand.
+        run: >
+          dotnet test "${{ github.workspace }}/tests/OpcUaBridge.Tests/OpcUaBridge.Tests.csproj"
+          -c Release --no-restore --filter "Category!=Integration"
 
       - name: Publish portable
         run: >
@@ -78,6 +85,24 @@ jobs:
           --self-contained true
           -o "${{ github.workspace }}/artifacts/self-contained"
 
+      # The bridge is published to a plain folder, never single-file: it resolves its
+      # logs, configuration and certificates from the directory its executable sits in.
+      - name: Publish bridge self-contained
+        run: >
+          dotnet publish "${{ github.workspace }}/src/OpcUaBridge.Host/OpcUaBridge.Host.csproj"
+          -c Release
+          -r win-x64
+          --self-contained true
+          -o "${{ github.workspace }}/artifacts/bridge-self-contained"
+
+      - name: Publish bridge win_x64
+        run: >
+          dotnet publish "${{ github.workspace }}/src/OpcUaBridge.Host/OpcUaBridge.Host.csproj"
+          -c Release
+          -r win-x64
+          --self-contained false
+          -o "${{ github.workspace }}/artifacts/bridge-win_x64"
+
       - name: Archive output variants
         shell: pwsh
         run: |
@@ -90,6 +115,9 @@ jobs:
           Compress-Archive -Path (Join-Path $repoRoot "artifacts/win_x64/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-win_x64.zip") -Force
           Compress-Archive -Path (Join-Path $repoRoot "artifacts/self-contained/*") -DestinationPath (Join-Path $dist "OpcUaExporter-$version-self-contained.zip") -Force
 
+          Compress-Archive -Path (Join-Path $repoRoot "artifacts/bridge-self-contained/*") -DestinationPath (Join-Path $dist "OpcUaBridge-$version-self-contained.zip") -Force
+          Compress-Archive -Path (Join-Path $repoRoot "artifacts/bridge-win_x64/*") -DestinationPath (Join-Path $dist "OpcUaBridge-$version-win_x64.zip") -Force
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -98,6 +126,8 @@ jobs:
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaBridge-${{ steps.meta.outputs.version }}-self-contained.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaBridge-${{ steps.meta.outputs.version }}-win_x64.zip
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
@@ -110,3 +140,5 @@ jobs:
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-portable.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-win_x64.zip
             ${{ github.workspace }}/artifacts/dist/OpcUaExporter-${{ steps.meta.outputs.version }}-self-contained.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaBridge-${{ steps.meta.outputs.version }}-self-contained.zip
+            ${{ github.workspace }}/artifacts/dist/OpcUaBridge-${{ steps.meta.outputs.version }}-win_x64.zip

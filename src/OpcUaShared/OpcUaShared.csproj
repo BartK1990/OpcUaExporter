@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    OPC UA client primitives shared by every front end in this repository:
+    the desktop exporter (OpcUaExporter.Core) and the headless gateway
+    (OpcUaBridge.Core).
+
+    Holds the domain models, the ApplicationConfiguration/PKI builder, endpoint
+    selection, session creation, and the browse/read/write/subscribe operations.
+    Deliberately free of any UI, hosting or file-format dependency.
+
+    RootNamespace is deliberately "OpcUaExporter": the types kept the namespaces
+    they had when they lived in OpcUaExporter.Core, so moving them here is
+    invisible to every existing `using` in the UI, the WPF shell and the tests.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>OpcUaExporter</RootNamespace>
+    <AssemblyName>OpcUaShared</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Version matched to what the OPC UA SDK already pulls in, so the
+         restore graph has no downgrade to resolve. -->
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.*" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua" Version="1.5.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Client" Version="1.5.*" />
+    <PackageReference Include="OPCFoundation.NetStandard.Opc.Ua.Configuration" Version="1.5.*" />
+  </ItemGroup>
+
+</Project>

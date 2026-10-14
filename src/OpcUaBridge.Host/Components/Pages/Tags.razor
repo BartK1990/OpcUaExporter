@@ -1,0 +1,122 @@
+@page "/tags"
+@implements IDisposable
+@inject TagRegistry Registry
+@inject TagValueStore Values
+
+<PageTitle>Tags — OPC UA Bridge</PageTitle>
+
+<h1>Tags</h1>
+
+<div class="toolbar">
+    <input class="filter" placeholder="Filter by name or node id" @bind="_filter" @bind:event="oninput" />
+    <span class="count">@_visible.Count of @Registry.Count</span>
+</div>
+
+@if (Registry.Count == 0)
+{
+    <p class="note">
+        No namespace has been captured yet, so there is nothing to mirror. Capture one from
+        the <a href="namespace">Namespace</a> page.
+    </p>
+}
+else
+{
+    <div class="table-scroll">
+        <table>
+            <thead>
+                <tr>
+                    <th>Path</th>
+                    <th>Mirror node id</th>
+                    <th>Value</th>
+                    <th>Status</th>
+                    <th>Source time</th>
+                </tr>
+            </thead>
+            <tbody>
+                @* Virtualized: rendering a few thousand rows eagerly would stall the circuit. *@
+                <Virtualize Items="_visible" ItemSize="32" TItem="MirrorTag">
+                    <ItemContent>
+                        <tr>
+                            <td>@context.BrowsePath</td>
+                            <td class="path">@context.MirrorNodeId</td>
+                            <td>@Format(Values.Read(context.Index)?.Value)</td>
+                            <td class="@StatusClass(context)">@StatusText(context)</td>
+                            <td>@(Values.Read(context.Index)?.SourceTimestamp.ToString("HH:mm:ss") ?? "—")</td>
+                        </tr>
+                    </ItemContent>
+                </Virtualize>
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    private string _filter = string.Empty;
+    private List<MirrorTag> _visible = [];
+    private PeriodicTimer? _timer;
+
+    protected override void OnInitialized()
+    {
+        ApplyFilter();
+
+        _timer = new PeriodicTimer(TimeSpan.FromSeconds(2));
+        _ = RefreshLoopAsync(_timer);
+    }
+
+    protected override void OnParametersSet() => ApplyFilter();
+
+    private async Task RefreshLoopAsync(PeriodicTimer timer)
+    {
+        try
+        {
+            while (await timer.WaitForNextTickAsync())
+            {
+                ApplyFilter();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private void ApplyFilter()
+    {
+        _visible = string.IsNullOrWhiteSpace(_filter)
+            ? Registry.Tags.ToList()
+            : Registry.Tags
+                .Where(t => t.BrowsePath.Contains(_filter, StringComparison.OrdinalIgnoreCase)
+                         || t.Identifier.Contains(_filter, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+    }
+
+    private string StatusText(MirrorTag tag)
+    {
+        var value = Values.Read(tag.Index);
+        if (value is null)
+            return tag.UpstreamNodeId is null ? "Unresolved" : "Waiting";
+
+        return value.StatusCode.ToString();
+    }
+
+    private string StatusClass(MirrorTag tag)
+    {
+        var value = Values.Read(tag.Index);
+        if (value is null)
+            return "pending";
+
+        return Opc.Ua.StatusCode.IsGood(value.StatusCode) ? "good"
+            : Opc.Ua.StatusCode.IsUncertain(value.StatusCode) ? "warning"
+            : "bad";
+    }
+
+    private static string Format(object? value) => value switch
+    {
+        null => "—",
+        double d => d.ToString("G6"),
+        float f => f.ToString("G6"),
+        _ => value.ToString() ?? "—"
+    };
+
+    public void Dispose() => _timer?.Dispose();
+}
