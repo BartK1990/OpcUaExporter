@@ -371,7 +371,8 @@
                                             </td>
                                             <td>@tag.DisplayName</td>
                                             <td class="mono">@tag.NodeId</td>
-                                            <td class="mono">@(reading?.Error ?? reading?.Value?.ToString() ?? "–")</td>
+                                            @{ var valueText = reading?.Error ?? ValueFormatter.Format(reading?.Value, "–"); }
+                                            <td class="mono" title="@valueText">@valueText</td>
                                             <td>
                                                 @{ var autoDataType = reading?.DataType ?? tag.DataType; var rowDataType = GetDataTypeOverride(tag.NodeId) ?? autoDataType; }
                                                 <div class="inline-write">
@@ -1004,6 +1005,7 @@
         return value switch
         {
             null => "-",
+            DateTime or DateTimeOffset => ValueFormatter.Format(value),
             double d => d.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
             float f => f.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
             decimal m => m.ToString("0.####", System.Globalization.CultureInfo.InvariantCulture),
@@ -1181,7 +1183,7 @@
     /// instead of <c>&lt;input type="datetime-local"&gt;</c>, whose display format (AM/PM, field order)
     /// follows the OS locale and can't be overridden.
     /// </summary>
-    private const string DateTimeInputFormat = "yyyy-MM-dd HH:mm:ss";
+    private const string DateTimeInputFormat = ValueFormatter.DateTimeFormat;
 
     private static readonly string[] AcceptedDateTimeInputFormats = [DateTimeInputFormat, "yyyy-MM-ddTHH:mm:ss"];
 

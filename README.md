@@ -48,15 +48,18 @@ source.
 
 ## Architecture
 
-The application is split into three projects, each with a single
-responsibility and a one-way dependency chain:
+The application is split into a UI library, a core library and two
+interchangeable hosts, with a one-way dependency chain:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  OpcUaExporter.Wpf          (net8.0-windows, WinExe)            │
-│  WPF shell: process lifetime, DI container, crash logging,      │
-│  BlazorWebView host, native dialogs (IFileDialogService)        │
-└────────────────────────────┬────────────────────────────────────┘
+┌────────────────────────────────┐  ┌────────────────────────────────┐
+│  OpcUaExporter.Wpf             │  │  OpcUaExporter.Web             │
+│  (net8.0-windows, WinExe)      │  │  (net8.0, ASP.NET Core)        │
+│  Shipped desktop app: WPF      │  │  Dev/test host: the same UI    │
+│  window + BlazorWebView,       │  │  in any browser on any OS      │
+│  native dialogs, crash log     │  │  (Blazor interactive server)   │
+└────────────────┬───────────────┘  └────────────────┬───────────────┘
+                 └───────────┬───────────────────────┘
                              │ references
 ┌────────────────────────────▼────────────────────────────────────┐
 │  OpcUaExporter.UI           (net8.0, Razor class library)       │
@@ -78,7 +81,7 @@ Neither `OpcUaExporter.Core` nor `OpcUaExporter.UI` references WPF or any
 Windows-only API, so both build and can be unit tested on any OS. Anything the
 UI needs from the host — currently only native file dialogs and message boxes —
 is expressed as an abstraction in Core (`IFileDialogService`) and implemented by
-the shell (`WpfFileDialogService`). That inverts what used to be a hard
+each host (`WpfFileDialogService`, `BrowserFileDialogService`). That inverts what used to be a hard
 dependency on static `[JSInvokable]` methods in the WPF window.
 
 ### Key design decisions
@@ -86,6 +89,7 @@ dependency on static `[JSInvokable]` methods in the WPF window.
 | Layer | Technology | Why |
 |---|---|---|
 | UI host | WPF + BlazorWebView (`OpcUaExporter.Wpf`) | Blazor Hybrid on Windows, native file dialogs, XAML layout |
+| Browser host | ASP.NET Core, Blazor interactive server (`OpcUaExporter.Web`) | Runs the identical UI in a browser on any OS, so it can be developed and end-to-end tested without Windows |
 | UI components | Razor class library (`OpcUaExporter.UI`) | Modern reactive UI, testable in isolation, no Windows dependency |
 | Domain + services | Class library (`OpcUaExporter.Core`) | OPC UA and application state without a UI framework attached |
 | Platform services | `IFileDialogService` in Core, implemented in the shell | Keeps the UI portable and lets tests substitute a stub |
@@ -98,7 +102,7 @@ dependency on static `[JSInvokable]` methods in the WPF window.
 
 ## Prerequisites
 
-- **Windows 10/11**
+- **Windows 10/11** for the desktop app (the browser host, simulation server and tests run on any OS)
 - **.NET 8 SDK** (https://dotnet.microsoft.com/download)
 
 No other setup is required — the OPC UA client library is a standard NuGet dependency restored on build.
@@ -114,14 +118,57 @@ dotnet run --project src/OpcUaExporter.Wpf
 
 Or open `OpcUaExporter.sln` in **Visual Studio 2022** and press **F5**.
 
+(`OpcUaExporter.Wpf` targets `net8.0-windows`, so on Linux/macOS build the
+individual projects below instead of the whole solution.)
+
+### Run in a browser (any OS)
+
+The same UI can be hosted in a browser — handy for developing the UI on
+Linux/macOS and for testing:
+
+```bash
+dotnet run --project src/OpcUaExporter.Web     # → http://localhost:5080
+```
+
+It is a local, single-user development host, not a deployment target: all tabs
+share one connection (like the desktop window), and the save/open "dialogs" ask
+for a path on the machine running the host. Set `OPCUAEXPORTER_DATA_DIR` to keep
+its profiles, settings and certificates apart from the desktop app's
+`%LocalAppData%\OpcUaExporter\`.
+
+### Simulation server
+
+No OPC UA server at hand? Start the bundled simulation server and connect to
+`opc.tcp://localhost:4840`:
+
+```bash
+dotnet run --project tools/OpcUaExporter.SimServer [-- --port 4840]
+```
+
+It serves `Objects/Simulation` with values that change every second
+(`Dynamic/…`), writable tags of the common built-in types including `DateTime`
+(`Static/…`), and a nested branch (`Deep/…`), over both `None` and
+`Basic256Sha256` security.
+
 ### Tests
 
 ```bash
-dotnet test tests/OpcUaExporter.Tests
+dotnet test tests/OpcUaExporter.Tests       # unit tests
+dotnet test tests/OpcUaExporter.E2ETests    # end-to-end UI tests
 ```
 
-The test project targets `net8.0` and references only `OpcUaExporter.Core` and
-`OpcUaExporter.UI`, so it runs on Windows, Linux and macOS alike.
+Both run on Windows, Linux and macOS. The unit tests cover Core and the UI's
+services. The end-to-end tests start the simulation server and the browser host
+in-process and drive the real UI with Playwright in headless Chromium —
+browsing, selection, writes (including DateTime), subscriptions and the trend
+chart. They need a Playwright Chromium build: point `PLAYWRIGHT_BROWSERS_PATH`
+at one, or install it once after building:
+
+```bash
+pwsh tests/OpcUaExporter.E2ETests/bin/Debug/net8.0/playwright.ps1 install chromium
+```
+
+Only the WPF shell itself (`OpcUaExporter.Wpf`) is not covered — keep it thin.
 
 ---
 
@@ -185,6 +232,12 @@ Directory.Build.props                ← properties shared by every project
 │   │           ├── trend-chart.js       ← live trend chart rendering
 │   │           └── theme.js             ← applies data-theme to the document
 │   │
+│   ├── OpcUaExporter.Web/           ← net8.0 · browser host for development and E2E tests
+│   │   ├── Program.cs / OpcUaExporterWebApp.cs  ← builds the app (also used by the E2E tests)
+│   │   ├── Components/App.razor     ← host page (counterpart of the WPF index.html)
+│   │   └── Services/
+│   │       └── BrowserFileDialogService.cs  ← IFileDialogService via prompt/confirm/alert
+│   │
 │   └── OpcUaExporter.Wpf/           ← net8.0-windows · WinExe (OpcUaExporter.exe)
 │       ├── App.xaml / App.xaml.cs   ← DI container, OnStartup, global crash logging
 │       ├── MainWindow.xaml / .cs    ← WPF Window hosting BlazorWebView
@@ -194,8 +247,12 @@ Directory.Build.props                ← properties shared by every project
 │           ├── index.html           ← host page
 │           └── app.ico
 │
+├── tools/
+│   └── OpcUaExporter.SimServer/     ← net8.0 · OPC UA simulation server (not shipped)
+│
 └── tests/
-    └── OpcUaExporter.Tests/         ← net8.0 · xUnit
+    ├── OpcUaExporter.Tests/         ← net8.0 · xUnit unit tests
+    └── OpcUaExporter.E2ETests/      ← net8.0 · xUnit + Playwright end-to-end UI tests
 ```
 
 ---
