@@ -91,10 +91,11 @@ public sealed class UpstreamReconnectIntegrationTests : IAsyncLifetime
         // reconnect, and by the time the handler runs the session is healthy again. The
         // handler then aborts and reports back with no session -- which the manager used
         // to read as "still trying", and so waited for a callback that never came.
-        _manager.BeginReconnect(session);
-        Assert.Equal(UpstreamConnectionState.Reconnecting, _manager.State);
+        _manager.ReportKeepAliveFailure(session, "Simulated late keep-alive.");
 
-        await WaitForAsync(() => _manager.State == UpstreamConnectionState.Connected, TimeSpan.FromSeconds(15));
+        await WaitForAsync(() => _manager.Status.ReconnectCount == 1, TimeSpan.FromSeconds(15));
+        lock (_states) Assert.Contains(UpstreamConnectionState.Reconnecting, _states);
+        Assert.Equal(UpstreamConnectionState.Connected, _manager.State);
 
         Assert.Same(session, _manager.Session);
         Assert.Equal(epoch, _manager.Status.SessionEpoch);
@@ -123,6 +124,40 @@ public sealed class UpstreamReconnectIntegrationTests : IAsyncLifetime
         await WaitForAsync(() => _manager.State == UpstreamConnectionState.Connected, TimeSpan.FromSeconds(45));
 
         Assert.True(_manager.Status.SessionEpoch > epoch);
+    }
+
+    [Fact]
+    public async Task AnOperatorReconnectDuringAReconnect_OpensAFreshSessionAndTheAbandonedAttemptStaysAbandoned()
+    {
+        var epoch = _manager.Status.SessionEpoch;
+
+        await StopUpstreamAsync();
+        await WaitForAsync(() => _manager.State == UpstreamConnectionState.Reconnecting, TimeSpan.FromSeconds(15));
+        lock (_states) _states.Clear();
+
+        // Well inside the resume deadline, so only the operator's request can explain the
+        // bridge leaving Reconnecting. Several clicks must make one attempt, not a queue.
+        _manager.RequestReconnect();
+        _manager.RequestReconnect();
+        _manager.RequestReconnect();
+
+        await WaitForAsync(
+            () => { lock (_states) return _states.Contains(UpstreamConnectionState.Connecting); },
+            TimeSpan.FromSeconds(5));
+        Assert.Contains(_log.Messages, m => m == "Reconnect requested by an operator.");
+        Assert.DoesNotContain(_log.Messages, m => m.Contains("did not resume", StringComparison.Ordinal));
+
+        await StartUpstreamAsync();
+        await WaitForAsync(() => _manager.State == UpstreamConnectionState.Connected, TimeSpan.FromSeconds(45));
+        var reconnected = _manager.Status;
+        Assert.True(reconnected.SessionEpoch > epoch);
+
+        // The SDK handler the operator's request abandoned must not resurface and swap the
+        // session underneath the fresh one.
+        await Task.Delay(TimeSpan.FromSeconds(5));
+        Assert.Equal(UpstreamConnectionState.Connected, _manager.State);
+        Assert.Equal(reconnected.SessionEpoch, _manager.Status.SessionEpoch);
+        Assert.Equal(1, _log.Messages.Count(m => m == "Reconnect requested by an operator."));
     }
 
     private async Task StartUpstreamAsync()
