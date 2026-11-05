@@ -68,6 +68,21 @@ public sealed class UpstreamOptions
     [Range(1_000, 3_600_000)]
     public int ReconnectMaxDelayMs { get; set; } = 30_000;
 
+    /// <summary>
+    /// How long the bridge lets the SDK try to resume a dropped session before it abandons
+    /// that session and opens a fresh one, as a service restart would.
+    /// </summary>
+    /// <remarks>
+    /// Resuming is preferred because it keeps the server-side subscriptions, but it can
+    /// stall: the SDK's reconnect handler has no deadline of its own, and a server that
+    /// half-closes the connection can leave it retrying (or waiting) indefinitely while a
+    /// brand-new session would succeed at once. Past this deadline the subscriptions on
+    /// the old session are long gone anyway -- it is well beyond the session timeout --
+    /// so a fresh session costs nothing that has not already been lost.
+    /// </remarks>
+    [Range(10_000, 86_400_000)]
+    public int ReconnectResumeTimeoutMs { get; set; } = 120_000;
+
     /// <summary>Timeout for a single write forwarded from a downstream client.</summary>
     [Range(100, 120_000)]
     public int WriteTimeoutMs { get; set; } = 5_000;
