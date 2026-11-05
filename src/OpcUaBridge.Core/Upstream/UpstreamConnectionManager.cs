@@ -37,6 +37,14 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
     private readonly SemaphoreSlim _reconnectRequested = new(0, 1);
     private readonly Lock _stateGate = new();
 
+    // Serialises the SDK's reconnect-complete callback against the supervisor abandoning
+    // that reconnect, so a session recovered at the last moment is either adopted or
+    // disposed -- never attached after the supervisor has already moved on.
+    private readonly Lock _reconnectGate = new();
+
+    /// <summary>Why the supervisor was asked for a fresh session; null when an operator asked.</summary>
+    private string? _freshSessionReason;
+
     private Session? _session;
     private SessionReconnectHandler? _reconnectHandler;
     private int _epoch;
@@ -92,7 +100,21 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
             StatusCodes.BadNoCommunication,
             $"The upstream OPC UA server is not connected (state: {State}).");
 
-    public void RequestReconnect()
+    public void RequestReconnect() => SignalSupervisor();
+
+    /// <summary>
+    /// Asks the supervisor loop to drop the current session and open a fresh one.
+    /// </summary>
+    /// <remarks>
+    /// Used from SDK threads, which must not block on closing a session themselves.
+    /// </remarks>
+    private void RequestFreshSession(string reason)
+    {
+        Interlocked.Exchange(ref _freshSessionReason, reason);
+        SignalSupervisor();
+    }
+
+    private void SignalSupervisor()
     {
         // The semaphore is capped at one permit: several operators clicking "reconnect"
         // should produce one attempt, not a queue of them.
@@ -169,7 +191,7 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
         }
         finally
         {
-            CancelReconnect();
+            lock (_reconnectGate) CancelReconnect();
             await CloseSessionAsync();
         }
     }
@@ -266,7 +288,8 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
         }
     }
 
-    private void BeginReconnect(ISession session)
+    /// <remarks>Internal so tests can trigger the reconnect path on a healthy session.</remarks>
+    internal void BeginReconnect(ISession session)
     {
         lock (_stateGate)
         {
@@ -282,53 +305,99 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
         SetState(UpstreamConnectionState.Reconnecting);
         SessionLost?.Invoke(this, EventArgs.Empty);
 
-        _reconnectHandler?.Dispose();
-        _reconnectHandler = new SessionReconnectHandler(
-            session.MessageContext.Telemetry,
-            reconnectAbort: true,
-            maxReconnectPeriod: upstream.ReconnectMaxDelayMs);
+        lock (_reconnectGate)
+        {
+            _reconnectHandler?.Dispose();
+            _reconnectHandler = new SessionReconnectHandler(
+                session.MessageContext.Telemetry,
+                reconnectAbort: true,
+                maxReconnectPeriod: upstream.ReconnectMaxDelayMs);
 
-        _reconnectHandler.BeginReconnect(session, upstream.ReconnectMinDelayMs, OnReconnectComplete);
+            _reconnectHandler.BeginReconnect(session, upstream.ReconnectMinDelayMs, OnReconnectComplete);
+        }
     }
 
     private void OnReconnectComplete(object? sender, EventArgs e)
     {
         try
         {
-            if (!ReferenceEquals(sender, _reconnectHandler))
-                return;                                     // superseded by a newer attempt
+            Session recovered;
+            bool transferred;
 
-            var recovered = _reconnectHandler?.Session as Session;
-            if (recovered is null)
-                return;                                     // still failing; the handler keeps trying
-
-            // Three outcomes, and an acquisition engine recovers differently from each:
-            // the same session reactivated (subscriptions still live), a new session that
-            // inherited them, or a new session with nothing (the server restarted).
-            var sameSession = ReferenceEquals(recovered, _session);
-            if (!sameSession)
+            lock (_reconnectGate)
             {
-                var previous = _session;
-                if (previous is not null)
-                    previous.KeepAlive -= OnKeepAlive;
+                var handler = sender as SessionReconnectHandler;
 
-                AttachSession(recovered, _options.CurrentValue.Upstream);
+                if (handler is null || !ReferenceEquals(handler, _reconnectHandler))
+                {
+                    // Superseded: the supervisor gave up on this attempt, or a newer one
+                    // replaced it. A session it recreated at the last moment belongs to
+                    // nobody now, and would sit on the upstream server holding thousands
+                    // of monitored items until it timed out.
+                    if (handler?.Session is Session orphan && !ReferenceEquals(orphan, _session))
+                        _ = DisposeSessionAsync(orphan);
+                    return;
+                }
 
-                lock (_stateGate) _epoch++;
+                // The handler calls back exactly once per attempt, and is idle afterwards:
+                // it does not keep trying. A null session does not mean "still failing" --
+                // it is the SDK's way of saying it aborted the reconnect because keep-alives
+                // on the existing session came back by themselves. Treating it as anything
+                // else leaves the bridge in Reconnecting forever, with nothing left running
+                // that would ever leave that state.
+                var candidate = handler.Session as Session;
+                if (candidate is null)
+                {
+                    var current = _session;
+                    if (current is null || !current.Connected || current.KeepAliveStopped)
+                    {
+                        _reconnectInFlight = false;
+                        RequestFreshSession(
+                            "The upstream reconnect ended without a usable session; opening a fresh one.");
+                        return;
+                    }
+
+                    _logger.LogInformation("Upstream keep-alives recovered on the existing session.");
+                    candidate = current;
+                }
+
+                recovered = candidate;
+
+                // Three outcomes, and an acquisition engine recovers differently from each:
+                // the same session reactivated (subscriptions still live), a new session that
+                // inherited them, or a new session with nothing (the server restarted).
+                var sameSession = ReferenceEquals(recovered, _session);
+                if (!sameSession)
+                {
+                    var previous = _session;
+                    if (previous is not null)
+                    {
+                        previous.KeepAlive -= OnKeepAlive;
+
+                        // The SDK recreates from the old session as a template and leaves
+                        // that template for its owner to dispose.
+                        _ = DisposeSessionAsync(previous, close: false);
+                    }
+
+                    AttachSession(recovered, _options.CurrentValue.Upstream);
+
+                    lock (_stateGate) _epoch++;
+                }
+
+                transferred = sameSession || recovered.Subscriptions.Any(s => s.Created);
+
+                lock (_stateGate)
+                {
+                    _reconnectCount++;
+                    _connectedSince = _time.GetUtcNow();
+                    _lastKeepAliveUtc = _connectedSince;
+                    _lastError = null;
+                    _reconnectInFlight = false;
+                }
+
+                SetState(UpstreamConnectionState.Connected);
             }
 
-            var transferred = sameSession || recovered.Subscriptions.Any(s => s.Created);
-
-            lock (_stateGate)
-            {
-                _reconnectCount++;
-                _connectedSince = _time.GetUtcNow();
-                _lastKeepAliveUtc = _connectedSince;
-                _lastError = null;
-                _reconnectInFlight = false;
-            }
-
-            SetState(UpstreamConnectionState.Connected);
             _logger.LogInformation(
                 "Upstream reconnected (epoch {Epoch}, reconnect #{ReconnectCount}). Subscriptions {Disposition}.",
                 _epoch, _reconnectCount, transferred ? "were transferred" : "must be recreated");
@@ -337,6 +406,8 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
         }
         catch (Exception ex)
         {
+            // Whatever state this left behind, the reconnect deadline in the supervisor
+            // loop will notice it and start over with a fresh session.
             _reconnectInFlight = false;
             _logger.LogError(ex, "Failed to complete an upstream reconnect.");
         }
@@ -391,24 +462,78 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
         // watchdog below can notice a session that went quiet without an event.
         if (await _reconnectRequested.WaitAsync(TimeSpan.FromSeconds(5), ct))
         {
-            if (_session is not null)
+            var reason = Interlocked.Exchange(ref _freshSessionReason, null);
+            if (reason is null)
             {
                 _logger.LogInformation("Reconnect requested by an operator.");
-
-                // Abandon any SDK reconnect already in flight. Its completion callback
-                // will not run for the session we are about to close, so this is the only
-                // place _reconnectInFlight can be cleared -- and leaving it set would
-                // silently disable the keep-alive handler and the watchdog for the rest
-                // of the process's life.
-                CancelReconnect();
-                await CloseSessionAsync();
-                SetState(UpstreamConnectionState.Disconnected);
+            }
+            else
+            {
+                _logger.LogWarning("{Reason}", reason);
+                lock (_stateGate) _lastError = reason;
             }
 
+            await StartOverAsync();
             return;
         }
 
         CheckKeepAliveWatchdog();
+        await CheckReconnectDeadlineAsync();
+    }
+
+    /// <summary>
+    /// Drops the session and any reconnect in flight; the supervisor loop then opens a
+    /// fresh session, exactly as it does on service start.
+    /// </summary>
+    private async Task StartOverAsync()
+    {
+        // Abandon any SDK reconnect already in flight. Its completion callback will not
+        // run for the session we are about to close, so this is the only place
+        // _reconnectInFlight can be cleared -- and leaving it set would silently disable
+        // the keep-alive handler and the watchdog for the rest of the process's life.
+        lock (_reconnectGate) CancelReconnect();
+        await CloseSessionAsync();
+        SetState(UpstreamConnectionState.Disconnected);
+    }
+
+    /// <summary>
+    /// Gives up on resuming the old session once that has taken too long.
+    /// </summary>
+    /// <remarks>
+    /// The SDK's reconnect handler has no deadline. Faced with a server that half-closed
+    /// the connection it can retry, or wait on a reply that never comes, for as long as
+    /// the process lives -- the bridge has been seen sitting in Reconnecting for hours
+    /// while a service restart connected at the first attempt. Opening a fresh session is
+    /// what that restart does, so past the deadline the supervisor does it itself.
+    /// </remarks>
+    private async Task CheckReconnectDeadlineAsync()
+    {
+        var timeout = TimeSpan.FromMilliseconds(_options.CurrentValue.Upstream.ReconnectResumeTimeoutMs);
+        TimeSpan elapsed;
+
+        lock (_reconnectGate)
+        {
+            if (State != UpstreamConnectionState.Reconnecting)
+                return;
+
+            lock (_stateGate) elapsed = _time.GetUtcNow() - _stateSince;
+            if (elapsed <= timeout)
+                return;
+
+            // Detach the handler while holding the gate, so a callback arriving from here
+            // on finds itself superseded and disposes whatever it recovered.
+            CancelReconnect();
+        }
+
+        var message =
+            $"Upstream session did not resume within {timeout.TotalSeconds:F0}s; abandoning it and opening a fresh session.";
+        _logger.LogWarning(
+            "Upstream session did not resume within {TimeoutSeconds:F0}s ({ElapsedSeconds:F0}s in Reconnecting); " +
+            "abandoning it and opening a fresh session.",
+            timeout.TotalSeconds, elapsed.TotalSeconds);
+        lock (_stateGate) _lastError = message;
+
+        await StartOverAsync();
     }
 
     /// <summary>
@@ -443,6 +568,7 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
     }
 
     /// <summary>Abandons an in-flight SDK reconnect and re-arms the keep-alive path.</summary>
+    /// <remarks>Callers hold <see cref="_reconnectGate"/>.</remarks>
     private void CancelReconnect()
     {
         var handler = Interlocked.Exchange(ref _reconnectHandler, null);
@@ -510,10 +636,21 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
             return;
 
         session.KeepAlive -= OnKeepAlive;
+        await DisposeSessionAsync(session);
+    }
 
+    /// <summary>Closes (optionally) and disposes a session this manager no longer uses.</summary>
+    private async Task DisposeSessionAsync(Session session, bool close = true)
+    {
         try
         {
-            await session.CloseAsync(CancellationToken.None);
+            if (close)
+            {
+                // Bounded: this runs when the link is suspect, and a close waiting on a
+                // reply that never comes must not hold up opening the replacement.
+                using var timeout = new CancellationTokenSource(SessionCloseTimeout);
+                await session.CloseAsync(timeout.Token);
+            }
         }
         catch (Exception ex)
         {
@@ -522,13 +659,16 @@ public sealed class UpstreamConnectionManager : BackgroundService, IUpstreamConn
         }
         finally
         {
-            session.Dispose();
+            try { session.Dispose(); }
+            catch (Exception ex) { _logger.LogDebug(ex, "Disposing the upstream session reported an error."); }
         }
     }
 
+    private static readonly TimeSpan SessionCloseTimeout = TimeSpan.FromSeconds(10);
+
     public override void Dispose()
     {
-        _reconnectHandler?.Dispose();
+        lock (_reconnectGate) _reconnectHandler?.Dispose();
         _reconnectRequested.Dispose();
         base.Dispose();
     }

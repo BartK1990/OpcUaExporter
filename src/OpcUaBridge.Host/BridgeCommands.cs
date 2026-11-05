@@ -97,6 +97,7 @@ public static class BridgeCommands
               Client identity     {options.Upstream.ClientApplicationName}
               Keep-alive          {options.Upstream.KeepAliveIntervalMs}ms
               Reconnect backoff   {options.Upstream.ReconnectMinDelayMs}ms to {options.Upstream.ReconnectMaxDelayMs}ms
+              Resume timeout      {options.Upstream.ReconnectResumeTimeoutMs}ms, then a fresh session
 
             Acquisition
               Mode                {options.Acquisition.Mode}
