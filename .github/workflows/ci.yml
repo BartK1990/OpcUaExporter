@@ -19,7 +19,11 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: Playwright only installs Chromium on the Ubuntu
+    # releases it supports, and ubuntu-latest moving to 26.04 broke the E2E step with
+    # "Playwright does not support chromium on ubuntu26.04-x64". Move this forward
+    # together with the Microsoft.Playwright package.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
 
     steps:

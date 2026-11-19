@@ -910,13 +910,12 @@ public class OpcUaService
         if (string.IsNullOrWhiteSpace(Profile.EndpointUrl))
             warnings.Add("Endpoint URL is required.");
 
-        if (Profile.AuthenticationType == AuthenticationType.UsernamePassword)
+        // Only the username is required: some servers accept a user with an empty password,
+        // and the session factory sends an empty one as-is.
+        if (Profile.AuthenticationType == AuthenticationType.UsernamePassword &&
+            string.IsNullOrWhiteSpace(Profile.Username))
         {
-            if (string.IsNullOrWhiteSpace(Profile.Username))
-                warnings.Add("Username is required for UsernamePassword authentication.");
-
-            if (string.IsNullOrWhiteSpace(Profile.Password))
-                warnings.Add("Password is required for UsernamePassword authentication.");
+            warnings.Add("Username is required for UsernamePassword authentication.");
         }
 
         if (string.IsNullOrWhiteSpace(Profile.SecurityPolicy))
