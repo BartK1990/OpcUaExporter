@@ -78,8 +78,8 @@
                         <label class="field-label">Username</label>
                         <input class="field-input" @bind="Opc.Profile.Username" @bind:event="oninput" @bind:after="RefreshWarnings" autocomplete="username" />
 
-                        <label class="field-label">Password</label>
-                        <input class="field-input" type="password" @bind="Opc.Profile.Password" @bind:event="oninput" @bind:after="RefreshWarnings" autocomplete="current-password" />
+                        <label class="field-label">Password (optional)</label>
+                        <input class="field-input" type="password" @bind="Opc.Profile.Password" @bind:event="oninput" @bind:after="RefreshWarnings" autocomplete="current-password" placeholder="Leave empty if the user has no password" />
                     }
                 </section>
 
