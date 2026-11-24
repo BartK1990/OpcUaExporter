@@ -1171,17 +1171,34 @@ public class OpcUaService
                 .GroupBy(t => t.NodeId, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
 
+            // Snapshot: LastReadings is replaced copy-on-write by the subscription callback.
+            var readingsByNodeId = options.IncludeLastValues
+                ? LastReadings
+                    .GroupBy(r => r.NodeId, StringComparer.OrdinalIgnoreCase)
+                    .ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase)
+                : null;
+
             var rowsToExport = selected
                 .Where(id => browsedByNodeId.ContainsKey(id))
                 .Select(id =>
                 {
                     var tag = browsedByNodeId[id];
-                    return new TagReading
+                    var row = new TagReading
                     {
                         DisplayName = tag.DisplayName,
                         NodeId = tag.NodeId,
                         DataType = tag.DataType
                     };
+
+                    if (readingsByNodeId is not null && readingsByNodeId.TryGetValue(id, out var reading))
+                    {
+                        // A read refines an abstract declared type (BaseDataType) to the real one.
+                        row.DataType  = reading.DataType ?? tag.DataType;
+                        row.Value     = reading.Error is null ? FormatExportValue(reading.Value) : null;
+                        row.Quality   = reading.Error ?? reading.Quality;
+                        row.Timestamp = reading.Timestamp;
+                    }
+                    return row;
                 })
                 .ToList();
 
@@ -1382,6 +1399,7 @@ public class OpcUaService
         switch (options.Format)
         {
             case ExportFormat.Json:
+                // Without values every row's Value/Quality/Timestamp is null, so the output is unchanged.
                 var json = JsonSerializer.Serialize(rows, new JsonSerializerOptions
                 {
                     WriteIndented = true,
@@ -1391,12 +1409,12 @@ public class OpcUaService
                 break;
 
             case ExportFormat.Xlsx:
-                await Task.Run(() => WriteXlsx(options.OutputPath, rows), ct);
+                await Task.Run(() => WriteXlsx(options.OutputPath, rows, options.IncludeLastValues), ct);
                 break;
 
             case ExportFormat.Csv:
             default:
-                var csv = BuildCsv(rows);
+                var csv = BuildCsv(rows, options.IncludeLastValues);
                 await File.WriteAllTextAsync(options.OutputPath, csv, ct);
                 break;
         }
@@ -1404,42 +1422,66 @@ public class OpcUaService
         return options.OutputPath;
     }
 
-    private static void WriteXlsx(string path, List<TagReading> rows)
+    private static readonly string[] ExportHeaders = ["Display Name", "Node ID", "Data Type"];
+    private static readonly string[] ExportValueHeaders = ["Value", "Quality", "Timestamp"];
+
+    private static string?[] ExportFields(TagReading r, bool includeValues)
+        => includeValues
+            ? [r.DisplayName, r.NodeId, r.DataType, r.Value as string, r.Quality, r.Timestamp]
+            : [r.DisplayName, r.NodeId, r.DataType];
+
+    private static string[] ExportHeaderRow(bool includeValues)
+        => includeValues ? [.. ExportHeaders, .. ExportValueHeaders] : ExportHeaders;
+
+    private static void WriteXlsx(string path, List<TagReading> rows, bool includeValues)
     {
         using var document = ExcelDocument.Create(path, "Tags");
         var sheet = document.Sheets[0];
 
-        sheet.CellValue(1, 1, "Display Name");
-        sheet.CellValue(1, 2, "Node ID");
-        sheet.CellValue(1, 3, "Data Type");
+        var headers = ExportHeaderRow(includeValues);
+        for (var c = 0; c < headers.Length; c++)
+            sheet.CellValue(1, c + 1, headers[c]);
 
         for (var i = 0; i < rows.Count; i++)
         {
-            var row = i + 2;
-            sheet.CellValue(row, 1, rows[i].DisplayName);
-            sheet.CellValue(row, 2, rows[i].NodeId);
-            sheet.CellValue(row, 3, rows[i].DataType ?? string.Empty);
+            var fields = ExportFields(rows[i], includeValues);
+            for (var c = 0; c < fields.Length; c++)
+                sheet.CellValue(i + 2, c + 1, fields[c] ?? string.Empty);
         }
 
         document.Save();
     }
 
-    private static string BuildCsv(IEnumerable<TagReading> rows)
+    private static string BuildCsv(IEnumerable<TagReading> rows, bool includeValues = false)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Display Name,Node ID,Data Type");
+        sb.AppendLine(string.Join(',', ExportHeaderRow(includeValues)));
 
         foreach (var r in rows)
-        {
-            sb.Append(EscapeCsv(r.DisplayName));
-            sb.Append(',');
-            sb.Append(EscapeCsv(r.NodeId));
-            sb.Append(',');
-            sb.Append(EscapeCsv(r.DataType));
-            sb.AppendLine();
-        }
+            sb.AppendLine(string.Join(',', ExportFields(r, includeValues).Select(EscapeCsv)));
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Culture-independent text for an exported value, so a file reads the same whatever the machine's regional
+    /// settings. DateTime matches the UI's display/write format; arrays list their elements instead of a type name.
+    /// </summary>
+    internal static string? FormatExportValue(object? value)
+    {
+        var invariant = System.Globalization.CultureInfo.InvariantCulture;
+        return value switch
+        {
+            null => null,
+            string s => s,
+            DateTime dt => dt.ToString("yyyy-MM-dd HH:mm:ss", invariant),
+            DateTimeOffset dto => dto.UtcDateTime.ToString("yyyy-MM-dd HH:mm:ss", invariant),
+            byte[] bytes => Convert.ToBase64String(bytes),
+            System.Collections.IEnumerable items =>
+                "[" + string.Join(", ", items.Cast<object?>().Select(i => FormatExportValue(i) ?? "null")) + "]",
+            IFormattable f => f.ToString(null, invariant),
+            _ => value.ToString()
+        };
     }
 
     private static string EscapeCsv(string? value)
