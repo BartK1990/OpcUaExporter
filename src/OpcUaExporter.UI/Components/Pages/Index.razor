@@ -119,6 +119,11 @@
                     <button class="btn btn-ghost icon-btn" @onclick="BrowseOutputPath" title="Browse…"><i class="bi bi-folder2-open"></i></button>
                 </div>
 
+                <label class="export-option" title="Adds Value, Quality and Timestamp columns from the last read or subscription update. Tags without a value are exported with empty cells.">
+                    <input type="checkbox" @bind="_exportIncludeValues" />
+                    Include last value, quality &amp; timestamp
+                </label>
+
                 <button class="btn btn-accent" @onclick="Export" disabled="@(Opc.IsBusy || SelectedCount == 0)">
                     ↓ Export Selected
                 </button>
@@ -625,6 +630,7 @@
 
     private string _exportFormat = "Csv";
     private string _exportPath   = string.Empty;
+    private bool   _exportIncludeValues;
 
     private ElementReference _chartCanvasRef;
     private bool _chartJsInitialized;
@@ -1032,7 +1038,7 @@
         }
 
         var fmt = Enum.Parse<ExportFormat>(_exportFormat);
-        await Opc.ExportAsync(new ExportOptions { OutputPath = _exportPath, Format = fmt });
+        await Opc.ExportAsync(new ExportOptions { OutputPath = _exportPath, Format = fmt, IncludeLastValues = _exportIncludeValues });
     }
 
     private async Task BrowseOutputPath()

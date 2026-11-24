@@ -821,6 +821,21 @@ body.row-resizing * {
     cursor: pointer;
 }
 
+.export-option {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 8px 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.export-option input {
+    accent-color: var(--amber);
+    cursor: pointer;
+}
+
 .tag-tree-container {
     display: flex;
     flex-direction: column;
